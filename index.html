@@ -552,7 +552,30 @@ function vAcc(){
         <div class="sp"><div>${esc(a.name)}<span class="tag">${accType(a.type)[1]}</span></div></div>
         <b class="${v<0?'exp':''}">${money(v)}</b></div>`; }).join('')}</div>
     <button class="btn pri" style="width:100%" onclick="accModal()">＋ 新增帳戶</button>
+    <h2>每月預算</h2>
+    <div class="card row"><span class="sp sub">${budgetSummary()}</span>
+      <button class="btn sm" onclick="budgetModal()">設定</button></div>
+    ${recSection('expense')}
+    ${recSection('income')}
     <p class="sub">帳戶總額是所有帳戶餘額相加，現金總額只算類型為「現金」的帳戶。信用卡刷卡會讓餘額變成負數，代表欠款。在「記帳」頁選「轉帳」，可以記錄提款、還款等帳戶之間的轉移。</p>`;
+}
+function budgetSummary(){
+  const n = Object.keys(db.budgets.cats).length;
+  if(!db.budgets.total && !n) return '尚未設定';
+  return (db.budgets.total ? '總預算 ' + money(db.budgets.total) : '未設總預算') + (n ? `，${n} 個分類預算` : '');
+}
+function recSection(type){
+  const list = db.recurring.filter(r => r.type === type);
+  const name = type === 'expense' ? '定期支出' : '定期收入';
+  return `<div class="row" style="margin:18px 0 8px"><h2 class="sp" style="margin:0">${name}</h2>
+      <button class="btn sm" onclick="recModal(null,'${type}')">＋ 新增</button></div>
+    <div class="card" style="padding:4px 14px">${list.map(r => { const c = cat(r.catId), a = accOf(r); return `
+      <div class="item" onclick="recModal('${r.id}')">
+        <div class="ico" style="background:${c.color}33">${esc(c.icon)}</div>
+        <div class="sp"><div>${esc(c.name)}${r.note ? ' · ' + esc(r.note) : ''}</div>
+          <div class="sub">${recDesc(r)}${db.accounts.length > 1 ? ' · ' + esc(a.name) : ''}</div></div>
+        <b class="${type === 'expense' ? 'exp' : 'inc'}">${money(r.amount)}</b></div>`; }).join('')
+      || `<div class="empty">還沒有${name}</div>`}</div>`;
 }
 let am = null;
 function accModal(id){
@@ -624,23 +647,10 @@ function vSet(){
   <div class="row"><button class="btn pri sp" onclick="catModal()">＋ 新增分類</button>
     <button class="btn sp" onclick="restoreCats()">還原預設分類</button></div>
 
-  <h2>預算</h2>
-  <div class="card row"><span class="sp sub">${db.budgets.total ? '總預算 '+money(db.budgets.total) : '尚未設定'}</span>
-    <button class="btn sm" onclick="budgetModal()">設定</button></div>
-
-  <h2>定期收支</h2>
-  <div class="card" style="padding:4px 14px">
-    ${db.recurring.map(r => { const c = cat(r.catId); return `<div class="item" onclick="recModal('${r.id}')">
-      <div class="ico" style="background:${c.color}33">${esc(c.icon)}</div>
-      <div class="sp"><div>${esc(c.name)}${r.note?' · '+esc(r.note):''}</div><div class="sub">${recDesc(r)}</div></div>
-      <b class="${r.type==='expense'?'exp':'inc'}">${money(r.amount)}</b></div>`; }).join('')
-      || '<div class="empty">還沒有定期項目</div>'}
-  </div>
-  <button class="btn pri" style="width:100%" onclick="recModal()">＋ 新增定期收支</button>
 
   <h2>備份與還原</h2>
   <div class="card">
-    <div class="sub" style="margin-bottom:10px">資料只存在這支手機的瀏覽器裡。請定期匯出備份，再自行存到 Google Drive 等雲端硬碟。</div>
+    <div class="sub" style="margin-bottom:10px">資料已同步在你的帳號底下。仍建議定期匯出備份，另外存到 Google Drive 等雲端硬碟。</div>
     <div class="row">
       <button class="btn sp" onclick="exportJson()">匯出備份 (JSON)</button>
       <button class="btn sp" onclick="exportXlsx()">匯出 Excel (.xlsx)</button>
@@ -728,10 +738,10 @@ function recDesc(r){
   return `${r.type==='expense'?'支出':'收入'} · ${f} · 自 ${r.start} 起`;
 }
 let rm = null;
-function recModal(id){
+function recModal(id, type){
   const r = id ? db.recurring.find(x => x.id === id) : null;
-  rm = r ? {...r} : {id:null, type:'expense', amount:'', catId:null, note:'', freq:'monthly', day:1, start:ymd(new Date()), accId:defaultAcc().id};
-  if(!r) rm.catId = (db.categories.find(c => c.type === 'expense' && !c.hidden) || {}).id || null;
+  rm = r ? {...r} : {id:null, type:type || 'expense', amount:'', catId:null, note:'', freq:'monthly', day:1, start:ymd(new Date()), accId:defaultAcc().id};
+  if(!r) rm.catId = (db.categories.find(c => c.type === rm.type && !c.hidden) || {}).id || null;
   drawRec();
 }
 function drawRec(){
