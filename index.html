@@ -175,8 +175,8 @@ function gateView(){
       ? `<p class="sub">同步發生問題：${esc(s.msg)}</p>
          <div class="row"><button class="btn sp" onclick="location.reload()">重試</button><button class="btn sp" onclick="Sync.logout()">登出</button></div>`
       : `<p class="sub">正在載入你的帳本…</p>
-         <p class="sub" style="font-size:.75rem;word-break:break-all">診斷（版本 6）：狀態 ${esc(s.status)}／記錄 ${esc(s.diag?.recs ?? '-')}／設定 ${esc(s.diag?.set ?? '-')}${s.slow ? '／已等待超過 15 秒' : ''}
-           ${(s.errs || []).map(e => '<br>錯誤：' + esc(e)).join('')}</p>
+         ${s.slow ? `<p class="sub">等待時間比預期久，請確認網路連線。</p>` : ''}
+         ${(s.errs || []).map(e => `<p class="sub" style="font-size:.75rem;word-break:break-all">錯誤：${esc(e)}</p>`).join('')}
          <div class="row" style="justify-content:center"><button class="btn sm" onclick="location.reload()">重新載入</button>
          <button class="btn sm" onclick="Sync.logout()">登出</button></div>`);
   }
@@ -775,16 +775,12 @@ function attach(){
   // includeMetadataChanges：快取內容和伺服器相同時，也要收到「已由伺服器確認」的通知，否則全新帳號會一直等不到
   const meta = {includeMetadataChanges:true};
   unsubs.push(onSnapshot(rcol(), meta, snap => {
-    S.diag.recs = snap.metadata.fromCache ? '快取' + (snap.empty ? '(空)' : '') : '伺服器';
-    console.log('[sync] records', S.diag.recs); if(!S.ready) App.render();
     if(snap.metadata.fromCache && snap.empty) return;   // 等伺服器回應，避免把空的快取當成雲端內容
     recsData = snap.docs.map(d => d.data());
     cloudRecs = new Map(snap.docs.map(d => [d.id, stable(d.data())]));
     gotRecs = true; onData();
   }, fail));
   unsubs.push(onSnapshot(sdoc(), meta, snap => {
-    S.diag.set = snap.metadata.fromCache ? '快取' + (snap.exists() ? '' : '(無)') : '伺服器';
-    console.log('[sync] settings', S.diag.set); if(!S.ready) App.render();
     if(snap.metadata.fromCache && !snap.exists()) return;
     setData = snap.exists() ? snap.data() : null;
     cloudSetJson = setData ? stable(setData) : null;
@@ -808,9 +804,8 @@ onAuthStateChanged(auth, user => {
      !confirm('這支手機上有另一個帳號的記錄。要把它們合併上傳到目前登入的帳號嗎？\n選「取消」會清空本機資料，只使用此帳號的雲端資料。')){
     localBefore = {categories:clean(App.DEFAULT_CATS), records:[], budgets:{total:0, cats:{}}, recurring:[]};
   }
-  S.slow = false; S.diag = {recs:'尚未回應', set:'尚未回應'};
+  S.slow = false;
   setTimeout(() => { if(uid === user.uid && !S.ready){ S.slow = true; refresh(); } }, 15000);
-  console.log('[sync] signed in, attaching listeners');
   refresh();
   try{ attach(); } catch(e){ fail(e); }
 });
