@@ -599,7 +599,7 @@ function accModal(id){
   const a = id ? acc(id) : null;
   am = {id, type:a ? a.type : 'bank'};
   openModal(`<h2 style="margin-top:0">${a ? '編輯帳戶' : '新增帳戶'}</h2>
-    <div class="field"><label>名稱</label><input id="a_name" maxlength="12" value="${esc(a ? a.name : '')}" placeholder="例如：中國信託"></div>
+    <div class="field"><label>名稱</label><input id="a_name" maxlength="30" value="${esc(a ? a.name : '')}" placeholder="例如：中國信託"></div>
     <div class="field"><label>類型</label><select id="a_type" onchange="accTypeChanged(this.value)">
       ${ACC_TYPES.map(([k,n,i]) => `<option value="${k}" ${k === am.type ? 'selected' : ''}>${i} ${n}</option>`).join('')}</select></div>
     <div class="field"><label>圖示（emoji）</label><input id="a_icon" maxlength="4" value="${esc(a ? a.icon : accType(am.type)[2])}"></div>
