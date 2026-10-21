@@ -55,6 +55,7 @@ nav button.on{color:var(--accent);font-weight:600}
 .day{display:flex;justify-content:space-between;color:var(--sub);font-size:.85rem;margin:14px 2px 4px}
 .month{display:flex;align-items:center;justify-content:center;gap:16px;margin-bottom:10px;font-weight:600}
 .month button{background:none;border:0;font-size:1.3rem;padding:4px 12px}
+.month .mbtn{font-size:1rem;font-weight:600;border-radius:10px;background:var(--chip)}
 .sum{display:grid;grid-template-columns:repeat(3,1fr);text-align:center;gap:4px}
 .sum b{display:block;font-size:1.1rem}
 .bar{height:8px;background:var(--chip);border-radius:6px;overflow:hidden;margin-top:6px}
@@ -137,7 +138,8 @@ function runRecurring(){
     for(; cur <= today; cur.setDate(cur.getDate()+1)){
       const dim = new Date(cur.getFullYear(), cur.getMonth()+1, 0).getDate();
       const hit = r.freq === 'daily' || (r.freq === 'weekly' && cur.getDay() === r.day)
-               || (r.freq === 'monthly' && cur.getDate() === Math.min(r.day, dim));
+               || (r.freq === 'monthly' && cur.getDate() === Math.min(r.day, dim))
+               || (r.freq === 'yearly' && cur.getMonth() + 1 === r.month && cur.getDate() === Math.min(r.day, dim));
       const date = ymd(cur);
       if(hit && !db.records.some(x => x.ruleId === r.id && x.date === date)){
         // 固定 id：多台設備各自補記同一天時會寫到同一份雲端文件，不會重複
@@ -306,9 +308,18 @@ function sumBy(m, type){
 }
 function monthNav(){
   const [y,m] = st.month.split('-');
-  return `<div class="month"><button onclick="moveMonth(-1)">‹</button>${y} 年 ${+m} 月<button onclick="moveMonth(1)">›</button></div>`;
+  return `<div class="month"><button onclick="moveMonth(-1)" aria-label="上個月">‹</button>
+    <span style="position:relative"><button class="mbtn" onclick="pickMonth()">${y} 年 ${+m} 月 ▾</button>
+      <input type="month" id="mpick" value="${st.month}" onchange="setMonth(this.value)" tabindex="-1" aria-hidden="true"
+        style="position:absolute;left:0;bottom:0;width:100%;height:1px;opacity:0;pointer-events:none;padding:0;border:0"></span>
+    <button onclick="moveMonth(1)" aria-label="下個月">›</button></div>`;
 }
 function moveMonth(k){ st.month = shiftMonth(st.month, k); render(); }
+function setMonth(v){ if(/^\d{4}-\d{2}$/.test(v)){ st.month = v; render(); } }
+function pickMonth(){
+  const i = $('mpick');
+  try{ i.showPicker(); } catch(e){ i.focus(); i.click(); }
+}
 function vList(){
   const recs = monthRecords(st.month).sort((a,b) => b.date.localeCompare(a.date) || b.id.localeCompare(a.id));
   const inc = sumBy(st.month,'income').total, exp = sumBy(st.month,'expense').total;
@@ -550,7 +561,8 @@ function restoreCats(){
 
 /* ---------- 定期收支設定 ---------- */
 function recDesc(r){
-  const f = r.freq === 'daily' ? '每天' : r.freq === 'weekly' ? `每週${WEEK[r.day]}` : `每月 ${r.day} 號`;
+  const f = r.freq === 'daily' ? '每天' : r.freq === 'weekly' ? `每週${WEEK[r.day]}`
+          : r.freq === 'yearly' ? `每年 ${r.month} 月 ${r.day} 號` : `每月 ${r.day} 號`;
   return `${r.type==='expense'?'支出':'收入'} · ${f} · 自 ${r.start} 起`;
 }
 let rm = null;
@@ -573,9 +585,14 @@ function drawRec(){
     <div class="field"><label>頻率</label><select id="r_freq" onchange="recFreq(this.value)">
       <option value="monthly" ${rm.freq==='monthly'?'selected':''}>每月</option>
       <option value="weekly" ${rm.freq==='weekly'?'selected':''}>每週</option>
+      <option value="yearly" ${rm.freq==='yearly'?'selected':''}>每年</option>
       <option value="daily" ${rm.freq==='daily'?'selected':''}>每天</option></select></div>
     ${rm.freq==='monthly' ? `<div class="field"><label>每月幾號（沒有該日的月份會記在月底）</label>
         <input id="r_day" type="number" min="1" max="31" value="${rm.day}"></div>` : ''}
+    ${rm.freq==='yearly' ? `<div class="field"><label>每年幾月幾號（沒有該日的年份會記在月底，例如 2/29）</label>
+        <div class="row"><select id="r_month">${Array.from({length:12}, (_,i) =>
+          `<option value="${i+1}" ${i+1===(rm.month||1)?'selected':''}>${i+1} 月</option>`).join('')}</select>
+        <input id="r_day" type="number" min="1" max="31" value="${rm.day}"></div></div>` : ''}
     ${rm.freq==='weekly' ? `<div class="field"><label>星期幾</label><select id="r_day">
         ${WEEK.map((w,i) => `<option value="${i}" ${i===rm.day?'selected':''}>星期${w}</option>`).join('')}</select></div>` : ''}
     <div class="field"><label>開始日期</label><input id="r_start" type="date" value="${rm.start}"></div>
@@ -587,19 +604,21 @@ function syncRec(){
   rm.amount = $('r_amt').value; rm.note = $('r_note').value; rm.start = $('r_start').value || rm.start;
   rm.catId = $('r_cat').value || null;
   if($('r_day')) rm.day = parseInt($('r_day').value) || 0;
+  if($('r_month')) rm.month = parseInt($('r_month').value) || 1;
 }
 function recType(t){
   syncRec(); rm.type = t;
   rm.catId = (db.categories.find(c => c.type === t && !c.hidden) || {}).id || null; drawRec();
 }
-function recFreq(f){ syncRec(); rm.freq = f; rm.day = f === 'weekly' ? 1 : 1; drawRec(); }
+function recFreq(f){ syncRec(); rm.freq = f; rm.day = 1; if(f === 'yearly' && !rm.month) rm.month = 1; drawRec(); }
 function saveRec(){
   syncRec();
   const amount = parseFloat(rm.amount);
   if(!(amount > 0)){ toast('請輸入金額'); return; }
-  if(rm.freq === 'monthly' && !(rm.day >= 1 && rm.day <= 31)){ toast('日期請填 1–31'); return; }
+  if((rm.freq === 'monthly' || rm.freq === 'yearly') && !(rm.day >= 1 && rm.day <= 31)){ toast('日期請填 1–31'); return; }
   const rule = {id:rm.id || uid(), type:rm.type, amount, catId:rm.catId, note:rm.note, freq:rm.freq,
-                day:rm.freq === 'daily' ? 0 : rm.day, start:rm.start, last:null};
+                day:rm.freq === 'daily' ? 0 : rm.day, month:rm.freq === 'yearly' ? rm.month : null,
+                start:rm.start, last:null};
   if(rm.id){
     const old = db.recurring.find(x => x.id === rm.id);
     rule.last = (old.start === rule.start) ? old.last : null;
