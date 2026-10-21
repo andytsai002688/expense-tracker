@@ -553,16 +553,24 @@ function vAcc(){
         <b class="${v<0?'exp':''}">${money(v)}</b></div>`; }).join('')}</div>
     <button class="btn pri" style="width:100%" onclick="accModal()">＋ 新增帳戶</button>
     <h2>每月預算</h2>
-    <div class="card row"><span class="sp sub">${budgetSummary()}</span>
-      <button class="btn sm" onclick="budgetModal()">設定</button></div>
+    ${budgetCardSummary()}
     ${recSection('expense')}
     ${recSection('income')}
     <p class="sub">帳戶總額是所有帳戶餘額相加，現金總額只算類型為「現金」的帳戶。信用卡刷卡會讓餘額變成負數，代表欠款。在「記帳」頁選「轉帳」，可以記錄提款、還款等帳戶之間的轉移。</p>`;
 }
-function budgetSummary(){
-  const n = Object.keys(db.budgets.cats).length;
-  if(!db.budgets.total && !n) return '尚未設定';
-  return (db.budgets.total ? '總預算 ' + money(db.budgets.total) : '未設總預算') + (n ? `，${n} 個分類預算` : '');
+function budgetCardSummary(){
+  const rows = db.categories.filter(c => c.type === 'expense' && db.budgets.cats[c.id])
+    .map(c => ({c, v:db.budgets.cats[c.id]}));
+  const sum = rows.reduce((s, r) => s + r.v, 0), total = db.budgets.total;
+  const head = !total && !rows.length ? '尚未設定' : total ? '總預算 ' + money(total) : '未設總預算';
+  return `<div class="card"><div class="row"><b class="sp">${head}</b>
+      <button class="btn sm" onclick="budgetModal()">設定</button></div>
+    ${rows.map(r => `<div class="row" style="margin-top:8px"><span>${esc(r.c.icon)} ${esc(r.c.name)}</span>
+      <span class="sp"></span><b>${money(r.v)}</b></div>`).join('')}
+    ${rows.length ? `<div class="row sub" style="margin-top:10px;padding-top:8px;border-top:1px solid var(--line)">
+      <span>分類預算合計</span><span class="sp"></span><span>${money(sum)}</span></div>
+      ${total && sum > total ? `<div class="sub" style="color:var(--warn)">分類預算合計超過總預算 ${money(sum - total)}</div>`
+        : total ? `<div class="sub">尚未分配 ${money(total - sum)}</div>` : ''}` : ''}</div>`;
 }
 function recSection(type){
   const list = db.recurring.filter(r => r.type === type);
