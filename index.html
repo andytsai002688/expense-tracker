@@ -556,10 +556,12 @@ function vAcc(){
       <div><span class="sub">帳戶總額</span><b style="font-size:1.4rem">${money(t.all)}</b></div>
       <div><span class="sub">現金總額</span><b style="font-size:1.4rem">${money(t.cash)}</b></div></div>
     <h2>我的帳戶</h2>
-    <div class="card" style="padding:4px 14px">${db.accounts.map(a => { const v = t.b.get(a.id); return `
+    <div class="card" style="padding:4px 14px">${db.accounts.map((a, i) => { const v = t.b.get(a.id); return `
       <div class="item" onclick="accModal('${a.id}')"><div class="ico" style="background:var(--chip)">${esc(a.icon)}</div>
         <div class="sp"><div>${esc(a.name)}<span class="tag">${accType(a.type)[1]}</span></div></div>
-        <b class="${v<0?'exp':''}">${money(v)}</b></div>`; }).join('')}</div>
+        <b class="${v<0?'exp':''}">${money(v)}</b>
+        <button class="btn sm" ${i===0?'disabled':''} onclick="event.stopPropagation();moveAcc('${a.id}',-1)" aria-label="上移">▲</button>
+        <button class="btn sm" ${i===db.accounts.length-1?'disabled':''} onclick="event.stopPropagation();moveAcc('${a.id}',1)" aria-label="下移">▼</button></div>`; }).join('')}</div>
     <button class="btn pri" style="width:100%" onclick="accModal()">＋ 新增帳戶</button>
     <h2>每月預算</h2>
     ${budgetCardSummary()}
@@ -593,6 +595,16 @@ function recSection(type){
           <div class="sub">${recDesc(r)}${db.accounts.length > 1 ? ' · ' + esc(a.name) : ''}</div></div>
         <b class="${type === 'expense' ? 'exp' : 'inc'}">${money(r.amount)}</b></div>`; }).join('')
       || `<div class="empty">還沒有${name}</div>`}</div>`;
+}
+function moveAcc(id, dir){
+  const i = db.accounts.findIndex(a => a.id === id), j = i + dir;
+  if(i < 0 || j < 0 || j >= db.accounts.length) return;
+  // 沒有帳戶欄位的舊記錄與定期項目，預設算在「第一個現金帳戶」；調整順序前先把歸屬固定下來，才不會因為順序改變而換帳戶
+  const def = defaultAcc().id;
+  db.records.forEach(r => { if(!r.accId) r.accId = def; });
+  db.recurring.forEach(r => { if(!r.accId) r.accId = def; });
+  [db.accounts[i], db.accounts[j]] = [db.accounts[j], db.accounts[i]];
+  save(); render();
 }
 let am = null;
 function accModal(id){
