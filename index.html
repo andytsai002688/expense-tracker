@@ -106,9 +106,10 @@ function load(){
   }catch(e){}
   return {categories:structuredClone(DEFAULT_CATS), records:[], budgets:{total:0,cats:{}}, recurring:[]};
 }
-function save(){
+function save(localOnly){
   try{ localStorage.setItem(KEY, JSON.stringify(db)); }
   catch(e){ toast('儲存失敗，請先匯出備份'); }
+  if(!localOnly && window.Sync) Sync.push();
 }
 const uid = () => Date.now().toString(36) + Math.random().toString(36).slice(2,6);
 const cat = id => db.categories.find(c => c.id === id) || NONE;
@@ -139,7 +140,8 @@ function runRecurring(){
                || (r.freq === 'monthly' && cur.getDate() === Math.min(r.day, dim));
       const date = ymd(cur);
       if(hit && !db.records.some(x => x.ruleId === r.id && x.date === date)){
-        db.records.push({id:uid(), type:r.type, amount:r.amount, catId:r.catId, date, note:r.note, ruleId:r.id});
+        // 固定 id：多台設備各自補記同一天時會寫到同一份雲端文件，不會重複
+        db.records.push({id:`rr_${r.id}_${date}`, type:r.type, amount:r.amount, catId:r.catId, date, note:r.note, ruleId:r.id});
         added++;
       }
     }
@@ -389,7 +391,7 @@ function saveBudget(){
 /* ---------- 設定 ---------- */
 function vSet(){
   const list = db.categories.filter(c => c.type === st.catTab);
-  return `
+  return syncCard() + `
   <h2>分類管理</h2>
   <div class="seg">
     <button class="${st.catTab==='expense'?'on':''}" onclick="st.catTab='expense';render()">支出分類</button>
@@ -430,6 +432,21 @@ function vSet(){
     </div>
     <button class="btn" style="width:100%;margin-top:8px" onclick="$('file').click()">從備份檔還原</button>
   </div>`;
+}
+function syncCard(){
+  const s = window.syncState || {status:'off'};
+  let body;
+  if(!window.Sync){
+    body = `<div class="sub">目前無法使用雲端同步（可能沒有網路）。記錄仍會存在這支手機。</div>`;
+  } else if(s.status === 'off'){
+    body = `<div class="sub" style="margin-bottom:10px">登入後，不同設備登入同一個 Google 帳號就會同步記錄。不登入也可以照常使用。</div>
+      <button class="btn pri" style="width:100%" onclick="Sync.login()">使用 Google 登入同步</button>`;
+  } else {
+    const label = s.status === 'loading' ? '同步中…' : s.status === 'error' ? '同步發生問題：' + esc(s.msg || '') : '✅ 已同步';
+    body = `<div class="row"><div class="sp"><div>${label}</div><div class="sub">${esc(s.email)}</div></div>
+      <button class="btn sm" onclick="Sync.logout()">登出</button></div>`;
+  }
+  return `<h2>雲端同步</h2><div class="card">${body}</div>`;
 }
 function moveCat(id, dir){
   const same = db.categories.filter(c => c.type === st.catTab);
@@ -588,10 +605,140 @@ $('file').addEventListener('change', async e => {
   }catch(err){ toast('這不是有效的備份檔'); }
 });
 
+/* 提供給雲端同步模組使用 */
+window.App = {
+  get db(){ return db; }, set db(v){ db = v; },
+  get tab(){ return st.tab; },
+  save, render, toast, runRecurring, DEFAULT_CATS
+};
+
 /* ---------- 啟動 ---------- */
 runRecurring();
 render();
 if('serviceWorker' in navigator) navigator.serviceWorker.register('sw.js').catch(() => {});
+</script>
+<script type="module">
+import { initializeApp } from 'https://www.gstatic.com/firebasejs/10.14.1/firebase-app.js';
+import { getAuth, onAuthStateChanged, signInWithPopup, GoogleAuthProvider, signOut }
+  from 'https://www.gstatic.com/firebasejs/10.14.1/firebase-auth.js';
+import { initializeFirestore, persistentLocalCache, collection, doc, onSnapshot, writeBatch }
+  from 'https://www.gstatic.com/firebasejs/10.14.1/firebase-firestore.js';
+
+const app = initializeApp({
+  apiKey: "AIzaSyDWFtQ_Euyat9DzWcqoMA33-0SRomFtWQ4",
+  authDomain: "expense-tracker-8acf3.firebaseapp.com",
+  projectId: "expense-tracker-8acf3",
+  storageBucket: "expense-tracker-8acf3.firebasestorage.app",
+  messagingSenderId: "880918759097",
+  appId: "1:880918759097:web:82e427e8476e46ec733d68"
+});
+const auth = getAuth(app);
+const fs = initializeFirestore(app, {localCache: persistentLocalCache()});
+
+const S = window.syncState = {status:'off', email:'', msg:''};
+let uid = null, unsubs = [];
+let ready = false, gotRecs = false, gotSet = false;
+let recsData = [], setData = null, cloudRecs = new Map(), cloudSetJson = null, localBefore = null;
+
+const rcol = () => collection(fs, 'users', uid, 'records');
+const rdoc = id => doc(fs, 'users', uid, 'records', id);
+const sdoc = () => doc(fs, 'users', uid, 'meta', 'settings');
+const clean = o => JSON.parse(JSON.stringify(o));
+// 欄位依字母排序，才能和雲端回傳的內容比對是否相同
+const stable = v => JSON.stringify(v, (k, x) =>
+  x && typeof x === 'object' && !Array.isArray(x)
+    ? Object.fromEntries(Object.entries(x).sort(([a], [b]) => a < b ? -1 : 1)) : x);
+const settingsOf = d => clean({categories:d.categories, budgets:d.budgets, recurring:d.recurring});
+
+function refresh(){ if(App.tab !== 'add') App.render(); }
+function fail(e){ S.status = 'error'; S.msg = e.code || e.message; refresh(); App.toast('同步失敗：' + S.msg); }
+
+function push(){
+  if(!ready) return;
+  const db = App.db, ops = [];
+  const local = new Map(db.records.map(r => [r.id, stable(clean(r))]));
+  for(const [id, j] of local) if(cloudRecs.get(id) !== j) ops.push(b => b.set(rdoc(id), JSON.parse(j)));
+  for(const id of cloudRecs.keys()) if(!local.has(id)) ops.push(b => b.delete(rdoc(id)));
+  const sj = stable(settingsOf(db));
+  if(sj !== cloudSetJson) ops.push(b => b.set(sdoc(), JSON.parse(sj)));
+  for(let i = 0; i < ops.length; i += 400){
+    const b = writeBatch(fs);
+    ops.slice(i, i + 400).forEach(f => f(b));
+    b.commit().catch(fail);
+  }
+}
+
+function onData(){
+  if(!(gotRecs && gotSet)) return;
+  let first = false;
+  if(!ready){
+    first = true;
+    const linked = localStorage.getItem('ledger.linked') === uid;
+    const recs = recsData.slice();
+    if(!linked){   // 這支手機第一次連到此帳號：把本機記錄併入雲端
+      const ids = new Set(recs.map(r => r.id));
+      localBefore.records.forEach(r => { if(!ids.has(r.id)) recs.push(r); });
+    }
+    App.db = {...clean(setData || settingsOf(localBefore)), records:recs};
+    localStorage.setItem('ledger.linked', uid);
+    localStorage.setItem('ledger.uid', uid);
+    ready = true;
+  } else {
+    App.db = {...clean(setData || settingsOf(App.db)), records:recsData};
+  }
+  App.save(true);
+  S.status = 'on'; S.msg = '';
+  if(first){ App.runRecurring(); push(); }
+  refresh();
+}
+
+function attach(){
+  unsubs.push(onSnapshot(rcol(), snap => {
+    if(snap.metadata.fromCache && snap.empty) return;   // 等伺服器回應，避免把空的快取當成雲端內容
+    recsData = snap.docs.map(d => d.data());
+    cloudRecs = new Map(snap.docs.map(d => [d.id, stable(d.data())]));
+    gotRecs = true; onData();
+  }, fail));
+  unsubs.push(onSnapshot(sdoc(), snap => {
+    if(snap.metadata.fromCache && !snap.exists()) return;
+    setData = snap.exists() ? snap.data() : null;
+    cloudSetJson = setData ? stable(setData) : null;
+    gotSet = true; onData();
+  }, fail));
+}
+
+function detach(){
+  unsubs.forEach(u => u()); unsubs = [];
+  ready = gotRecs = gotSet = false; recsData = []; setData = null; cloudRecs = new Map(); cloudSetJson = null;
+}
+
+onAuthStateChanged(auth, user => {
+  detach();
+  if(!user){ uid = null; S.status = 'off'; S.email = ''; refresh(); return; }
+  uid = user.uid; S.email = user.email || ''; S.status = 'loading';
+  localBefore = clean(App.db);
+  const prev = localStorage.getItem('ledger.uid');
+  if(prev && prev !== uid && localBefore.records.length &&
+     !confirm('這支手機上有另一個帳號的記錄。要把它們合併上傳到目前登入的帳號嗎？\n選「取消」會清空本機資料，只使用此帳號的雲端資料。')){
+    localBefore = {categories:clean(App.DEFAULT_CATS), records:[], budgets:{total:0, cats:{}}, recurring:[]};
+  }
+  refresh();
+  attach();
+});
+
+window.Sync = {
+  push,
+  async login(){
+    try{ await signInWithPopup(auth, new GoogleAuthProvider()); }
+    catch(e){ App.toast('登入失敗：' + (e.code || e.message)); }
+  },
+  async logout(){
+    localStorage.removeItem('ledger.linked');   // 下次登入時會再把本機新增的記錄併入
+    await signOut(auth);
+    App.toast('已登出，記錄仍保留在這支手機');
+  }
+};
+refresh();
 </script>
 </body>
 </html>
