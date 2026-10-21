@@ -94,12 +94,43 @@ const DEFAULT_CATS = [
   ['i_other','其他收入','💰','#9aa0a6','income']
 ].map(([id,name,icon,color,type]) => ({id,name,icon,color,type,hidden:false}));
 const NONE = {id:null,name:'未分類',icon:'❓',color:'#9aa0a6'};
+const ACC_TYPES = [['cash','現金','💵'],['bank','銀行','🏦'],['card','信用卡','💳'],['wallet','電子支付','📱'],['other','其他','💼']];
+function accType(k){ return ACC_TYPES.find(x => x[0] === k) || ACC_TYPES[4]; }
+function defaultAccount(){ return {id:'a_cash', name:'現金', icon:'💵', type:'cash', initial:0}; }
 
 let db = load();
+ensureAccounts();
 let st = {tab:'add', month:ym(new Date()), statType:'expense', catTab:'expense', range:savedRange(),
           draft:newDraft('expense')};
 
 /* ---------- 資料 ---------- */
+function ensureAccounts(){
+  if(!Array.isArray(db.accounts) || !db.accounts.length) db.accounts = [defaultAccount()];
+}
+// 沒有 accId 的舊記錄一律算在第一個「現金」帳戶（沒有現金帳戶就算第一個帳戶）
+function defaultAcc(){ return db.accounts.find(a => a.type === 'cash') || db.accounts[0]; }
+function acc(id){ return db.accounts.find(a => a.id === id); }
+function accOf(r){ return acc(r.accId) || defaultAcc(); }
+function balances(){
+  const b = new Map(db.accounts.map(a => [a.id, Number(a.initial) || 0]));
+  const add = (id, v) => { if(b.has(id)) b.set(id, b.get(id) + v); };
+  for(const r of db.records){
+    if(r.type === 'transfer'){ add(accOf(r).id, -r.amount); const to = acc(r.toAccId); if(to) add(to.id, r.amount); }
+    else add(accOf(r).id, r.type === 'income' ? r.amount : -r.amount);
+  }
+  for(const [k, v] of b) b.set(k, Math.round(v * 100) / 100);
+  return b;
+}
+function totals(){
+  const b = balances();
+  let all = 0, cash = 0;
+  for(const a of db.accounts){ const v = b.get(a.id); all += v; if(a.type === 'cash') cash += v; }
+  return {b, all:Math.round(all * 100) / 100, cash:Math.round(cash * 100) / 100};
+}
+function accOptions(sel){
+  return db.accounts.map(a => `<option value="${a.id}" ${a.id === sel ? 'selected' : ''}>${esc(a.icon)} ${esc(a.name)}</option>`).join('');
+}
+function rememberAcc(id){ try{ localStorage.setItem('ledger.acc', id); }catch(e){} }
 function savedRange(){
   try{ const n = parseInt(localStorage.getItem('ledger.range')); if(n >= 1 && n <= 36) return n; }catch(e){}
   return 6;
@@ -119,7 +150,7 @@ function save(localOnly){
 const uid = () => Date.now().toString(36) + Math.random().toString(36).slice(2,6);
 const cat = id => db.categories.find(c => c.id === id) || NONE;
 const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
-const money = n => '$' + Number(n).toLocaleString('zh-TW', {maximumFractionDigits:2});
+const money = n => (n < 0 ? '-' : '') + '$' + Math.abs(Number(n)).toLocaleString('zh-TW', {maximumFractionDigits:2});
 const $ = id => document.getElementById(id);
 
 /* ---------- 日期 ---------- */
@@ -147,7 +178,7 @@ function runRecurring(){
       const date = ymd(cur);
       if(hit && !db.records.some(x => x.ruleId === r.id && x.date === date)){
         // 固定 id：多台設備各自補記同一天時會寫到同一份雲端文件，不會重複
-        db.records.push({id:`rr_${r.id}_${date}`, type:r.type, amount:r.amount, catId:r.catId, date, note:r.note, ruleId:r.id});
+        db.records.push({id:`rr_${r.id}_${date}`, type:r.type, amount:r.amount, catId:r.catId, date, note:r.note, ruleId:r.id, accId:r.accId || defaultAcc().id});
         added++;
       }
     }
@@ -159,9 +190,13 @@ function runRecurring(){
 /* ---------- 畫面骨架 ---------- */
 function newDraft(type){
   const first = db.categories.find(c => c.type === type && !c.hidden);
-  return {type, amount:'', catId:first ? first.id : null, date:ymd(new Date()), note:'', editId:null};
+  let accId = defaultAcc().id;
+  try{ const l = localStorage.getItem('ledger.acc'); if(l && acc(l)) accId = l; }catch(e){}
+  const other = db.accounts.find(a => a.id !== accId);
+  return {type, amount:'', catId:type === 'transfer' ? null : (first ? first.id : null), date:ymd(new Date()), note:'',
+          editId:null, accId, toAccId:other ? other.id : accId};
 }
-const TABS = [['add','✏️','記帳'],['list','📋','明細'],['stats','📊','統計'],['set','⚙️','設定']];
+const TABS = [['add','✏️','記帳'],['list','📋','明細'],['stats','📊','統計'],['acc','🏦','帳戶'],['set','⚙️','設定']];
 /* 登入關卡：同步狀態由 Firebase 模組更新；還沒登入或還沒載入完帳本時，只顯示這個畫面 */
 window.syncState = {status:'init', email:'', msg:'', ready:false};
 let gateFailed = false;
@@ -207,7 +242,7 @@ function render(){
   if(g){ $('app').innerHTML = g; return; }
   $('nav').innerHTML = TABS.map(([k,i,n]) =>
     `<button class="${st.tab===k?'on':''}" onclick="go('${k}')"><b>${i}</b>${n}</button>`).join('');
-  $('app').innerHTML = {add:vAdd, list:vList, stats:vStats, set:vSet}[st.tab]();
+  $('app').innerHTML = {add:vAdd, list:vList, stats:vStats, acc:vAcc, set:vSet}[st.tab]();
 }
 function go(tab){
   if(tab === 'add' && st.tab !== 'add' && !st.draft.editId) st.draft = newDraft(st.draft.type);
@@ -223,18 +258,24 @@ $('modal').addEventListener('click', e => { if(e.target.id === 'modal') closeMod
 
 /* ---------- 記帳 ---------- */
 function vAdd(){
-  const d = st.draft;
+  const d = st.draft, isT = d.type === 'transfer';
   const cats = db.categories.filter(c => c.type === d.type && (!c.hidden || c.id === d.catId));
   return `
   <div class="seg">
     <button class="${d.type==='expense'?'on':''}" onclick="setType('expense')">支出</button>
     <button class="${d.type==='income'?'on':''}" onclick="setType('income')">收入</button>
+    <button class="${isT?'on':''}" onclick="setType('transfer')">轉帳</button>
   </div>
-  <div class="amount ${d.type==='expense'?'exp':'inc'}" id="amt">${amtText()}</div>
-  <div class="cats">${cats.map(c => `
+  <div class="amount ${d.type==='expense'?'exp':d.type==='income'?'inc':''}" id="amt">${amtText()}</div>
+  ${isT ? `<div class="card">
+      <div class="row field"><span class="sub" style="width:48px">轉出</span><select onchange="st.draft.accId=this.value">${accOptions(d.accId)}</select></div>
+      <div class="row" style="margin:0"><span class="sub" style="width:48px">轉入</span><select onchange="st.draft.toAccId=this.value">${accOptions(d.toAccId)}</select></div>
+    </div>` : `<div class="cats">${cats.map(c => `
     <button class="cat ${c.id===d.catId?'on':''}" onclick="pickCat('${c.id}')"><i>${esc(c.icon)}</i>${esc(c.name)}</button>`).join('')}
     <button class="cat ${d.catId===null?'on':''}" onclick="pickCat(null)"><i>❓</i>未分類</button>
   </div>
+  <div class="row field"><span class="sub" style="width:48px">帳戶</span>
+    <select onchange="st.draft.accId=this.value;rememberAcc(this.value)">${accOptions(d.accId)}</select></div>`}
   <div class="row field">
     <input type="date" value="${d.date}" onchange="st.draft.date=this.value||st.draft.date" style="flex:1">
     <input type="text" placeholder="備註" value="${esc(d.note)}" oninput="st.draft.note=this.value" style="flex:2">
@@ -251,7 +292,15 @@ function vAdd(){
     <button class="btn dng" onclick="delRecord('${d.editId}')">刪除這筆</button></div>` : ''}`;
 }
 function amtText(){ return money(st.draft.amount === '' ? 0 : st.draft.amount.replace(/\.$/,'')) + (st.draft.amount.endsWith('.') ? '.' : ''); }
-function setType(t){ st.draft = {...newDraft(t), date:st.draft.date, note:st.draft.note, amount:st.draft.amount, editId:st.draft.editId}; render(); }
+function setType(t){
+  const o = st.draft;
+  st.draft = {...newDraft(t), date:o.date, note:o.note, amount:o.amount, editId:o.editId, accId:o.accId, toAccId:o.toAccId};
+  if(t === 'transfer' && st.draft.accId === st.draft.toAccId){
+    const other = db.accounts.find(a => a.id !== st.draft.accId);
+    if(other) st.draft.toAccId = other.id;
+  }
+  render();
+}
 function pickCat(id){ st.draft.catId = id; render(); }
 function key(k){
   let a = st.draft.amount;
@@ -269,12 +318,11 @@ function key(k){
 function saveRecord(){
   const d = st.draft, amount = parseFloat(d.amount);
   if(!(amount > 0)){ toast('請輸入金額'); return; }
-  if(d.editId){
-    const r = db.records.find(x => x.id === d.editId);
-    Object.assign(r, {type:d.type, amount, catId:d.catId, date:d.date, note:d.note});
-  } else {
-    db.records.push({id:uid(), type:d.type, amount, catId:d.catId, date:d.date, note:d.note});
-  }
+  const isT = d.type === 'transfer';
+  if(isT && d.accId === d.toAccId){ toast(db.accounts.length < 2 ? '請先到「帳戶」新增另一個帳戶' : '轉出與轉入帳戶不能相同'); return; }
+  const fields = {type:d.type, amount, catId:isT ? null : d.catId, date:d.date, note:d.note, accId:d.accId, toAccId:isT ? d.toAccId : undefined};
+  if(d.editId) Object.assign(db.records.find(x => x.id === d.editId), fields);
+  else db.records.push({id:uid(), ...fields});
   save();
   const wasEdit = !!d.editId;
   const warn = d.type === 'expense' ? budgetWarning(d.date.slice(0,7), d.catId) : '';
@@ -324,32 +372,45 @@ function pickMonth(){
   const i = $('mpick');
   try{ i.showPicker(); } catch(e){ i.focus(); i.click(); }
 }
+function recItem(r){
+  const isT = r.type === 'transfer';
+  const c = isT ? {icon:'🔁', name:'轉帳', color:'#9aa0a6'} : cat(r.catId);
+  const a = accOf(r), to = isT ? acc(r.toAccId) : null;
+  const where = isT ? `${a.name} → ${to ? to.name : '?'}` : (db.accounts.length > 1 ? a.name : '');
+  const note = [where, r.note].filter(Boolean).join(' · ');
+  return `<div class="item" onclick="editRecord('${r.id}')">
+    <div class="ico" style="background:${c.color}33">${esc(c.icon)}</div>
+    <div class="sp"><div>${esc(c.name)}${r.ruleId?'<span class="tag">定期</span>':''}</div>
+      ${note?`<div class="sub">${esc(note)}</div>`:''}</div>
+    <b class="${isT?'':r.type==='expense'?'exp':'inc'}">${isT?'':r.type==='expense'?'-':'+'}${money(r.amount)}</b>
+  </div>`;
+}
 function vList(){
   const recs = monthRecords(st.month).sort((a,b) => b.date.localeCompare(a.date) || b.id.localeCompare(a.id));
   const inc = sumBy(st.month,'income').total, exp = sumBy(st.month,'expense').total;
   const days = {};
   recs.forEach(r => (days[r.date] = days[r.date] || []).push(r));
-  return monthNav() + `
+  const tt = totals();
+  return `<div class="card sum" style="grid-template-columns:repeat(2,1fr);cursor:pointer" onclick="go('acc')">
+    <div><span class="sub">帳戶總額</span><b>${money(tt.all)}</b></div>
+    <div><span class="sub">現金總額</span><b>${money(tt.cash)}</b></div>
+  </div>` + monthNav() + `
   <div class="card sum">
     <div><span class="sub">收入</span><b class="inc">${money(inc)}</b></div>
     <div><span class="sub">支出</span><b class="exp">${money(exp)}</b></div>
     <div><span class="sub">結餘</span><b>${money(inc-exp)}</b></div>
   </div>` + (recs.length ? Object.keys(days).map(date => {
     const list = days[date];
-    const net = list.reduce((s,r) => s + (r.type==='income' ? r.amount : -r.amount), 0);
-    return `<div class="day"><span>${dayLabel(date)}</span><span>${net<0?'-':''}${money(Math.abs(net))}</span></div>
-    <div class="card" style="padding:4px 14px">${list.map(r => { const c = cat(r.catId); return `
-      <div class="item" onclick="editRecord('${r.id}')">
-        <div class="ico" style="background:${c.color}33">${esc(c.icon)}</div>
-        <div class="sp"><div>${esc(c.name)}${r.ruleId?'<span class="tag">定期</span>':''}</div>
-          ${r.note?`<div class="sub">${esc(r.note)}</div>`:''}</div>
-        <b class="${r.type==='expense'?'exp':'inc'}">${r.type==='expense'?'-':'+'}${money(r.amount)}</b>
-      </div>`; }).join('')}</div>`;
+    const net = list.reduce((s,r) => s + (r.type==='income' ? r.amount : r.type==='expense' ? -r.amount : 0), 0);
+    return `<div class="day"><span>${dayLabel(date)}</span><span>${money(net)}</span></div>
+    <div class="card" style="padding:4px 14px">${list.map(recItem).join('')}</div>`;
   }).join('') : '<div class="empty">這個月還沒有記錄</div>');
 }
 function editRecord(id){
   const r = db.records.find(x => x.id === id);
-  st.draft = {type:r.type, amount:String(r.amount), catId:r.catId, date:r.date, note:r.note||'', editId:id};
+  const from = accOf(r).id;
+  st.draft = {type:r.type, amount:String(r.amount), catId:r.catId, date:r.date, note:r.note||'', editId:id,
+              accId:from, toAccId:r.toAccId || (db.accounts.find(a => a.id !== from) || {id:from}).id};
   st.tab = 'add'; render(); scrollTo(0,0);
 }
 
@@ -479,6 +540,69 @@ function saveBudget(){
   save(); closeModal(); render(); toast('預算已儲存');
 }
 
+/* ---------- 帳戶 ---------- */
+function vAcc(){
+  const t = totals();
+  return `<div class="card sum" style="grid-template-columns:repeat(2,1fr)">
+      <div><span class="sub">帳戶總額</span><b style="font-size:1.4rem">${money(t.all)}</b></div>
+      <div><span class="sub">現金總額</span><b style="font-size:1.4rem">${money(t.cash)}</b></div></div>
+    <h2>我的帳戶</h2>
+    <div class="card" style="padding:4px 14px">${db.accounts.map(a => { const v = t.b.get(a.id); return `
+      <div class="item" onclick="accModal('${a.id}')"><div class="ico" style="background:var(--chip)">${esc(a.icon)}</div>
+        <div class="sp"><div>${esc(a.name)}<span class="tag">${accType(a.type)[1]}</span></div></div>
+        <b class="${v<0?'exp':''}">${money(v)}</b></div>`; }).join('')}</div>
+    <button class="btn pri" style="width:100%" onclick="accModal()">＋ 新增帳戶</button>
+    <p class="sub">帳戶總額是所有帳戶餘額相加，現金總額只算類型為「現金」的帳戶。信用卡刷卡會讓餘額變成負數，代表欠款。在「記帳」頁選「轉帳」，可以記錄提款、還款等帳戶之間的轉移。</p>`;
+}
+let am = null;
+function accModal(id){
+  const a = id ? acc(id) : null;
+  am = {id, type:a ? a.type : 'bank'};
+  openModal(`<h2 style="margin-top:0">${a ? '編輯帳戶' : '新增帳戶'}</h2>
+    <div class="field"><label>名稱</label><input id="a_name" maxlength="12" value="${esc(a ? a.name : '')}" placeholder="例如：中國信託"></div>
+    <div class="field"><label>類型</label><select id="a_type" onchange="accTypeChanged(this.value)">
+      ${ACC_TYPES.map(([k,n,i]) => `<option value="${k}" ${k === am.type ? 'selected' : ''}>${i} ${n}</option>`).join('')}</select></div>
+    <div class="field"><label>圖示（emoji）</label><input id="a_icon" maxlength="4" value="${esc(a ? a.icon : accType(am.type)[2])}"></div>
+    <div class="field"><label>起始餘額（建立帳戶時已有的金額，可為負數）</label>
+      <input id="a_init" type="number" inputmode="decimal" step="any" value="${a ? a.initial : 0}"></div>
+    <div class="row">${a && db.accounts.length > 1 ? `<button class="btn dng" onclick="delAcc('${a.id}')">刪除</button>` : ''}
+      <span class="sp"></span><button class="btn" onclick="closeModal()">取消</button>
+      <button class="btn pri" onclick="saveAcc()">儲存</button></div>`);
+}
+function accTypeChanged(k){
+  const i = $('a_icon');
+  if(i.value === accType(am.type)[2]) i.value = accType(k)[2];
+  am.type = k;
+}
+function saveAcc(){
+  const name = $('a_name').value.trim();
+  if(!name){ toast('請輸入名稱'); return; }
+  const type = $('a_type').value;
+  const f = {name, type, icon:$('a_icon').value.trim() || accType(type)[2], initial:parseFloat($('a_init').value) || 0};
+  if(am.id) Object.assign(acc(am.id), f); else db.accounts.push({id:'a_' + uid(), ...f});
+  save(); closeModal(); render();
+}
+function delAcc(id){
+  const a = acc(id), others = db.accounts.filter(x => x.id !== id);
+  const n = db.records.filter(r => accOf(r).id === id || r.toAccId === id).length;
+  openModal(`<h2 style="margin-top:0">刪除「${esc(a.name)}」</h2>
+    <p class="sub">此帳戶有 ${n} 筆記錄。請選擇要移到哪個帳戶；此帳戶的起始餘額 ${money(a.initial)} 也會加到該帳戶，帳戶總額不會改變。</p>
+    <div class="field"><select id="d_acc">${others.map(o => `<option value="${o.id}">${esc(o.icon)} ${esc(o.name)}</option>`).join('')}</select></div>
+    <div class="row"><button class="btn sp" onclick="closeModal()">取消</button>
+      <button class="btn dng sp" onclick="confirmDelAcc('${id}')">確定刪除</button></div>`);
+}
+function confirmDelAcc(id){
+  const to = acc($('d_acc').value), a = acc(id);
+  db.records.forEach(r => {
+    if(accOf(r).id === id) r.accId = to.id;
+    if(r.toAccId === id) r.toAccId = to.id;
+  });
+  db.recurring.forEach(r => { if(r.accId === id) r.accId = to.id; });
+  to.initial = Math.round(((Number(to.initial) || 0) + (Number(a.initial) || 0)) * 100) / 100;
+  db.accounts = db.accounts.filter(x => x.id !== id);
+  save(); closeModal(); render(); toast('已刪除帳戶');
+}
+
 /* ---------- 設定 ---------- */
 function vSet(){
   const list = db.categories.filter(c => c.type === st.catTab);
@@ -606,7 +730,7 @@ function recDesc(r){
 let rm = null;
 function recModal(id){
   const r = id ? db.recurring.find(x => x.id === id) : null;
-  rm = r ? {...r} : {id:null, type:'expense', amount:'', catId:null, note:'', freq:'monthly', day:1, start:ymd(new Date())};
+  rm = r ? {...r} : {id:null, type:'expense', amount:'', catId:null, note:'', freq:'monthly', day:1, start:ymd(new Date()), accId:defaultAcc().id};
   if(!r) rm.catId = (db.categories.find(c => c.type === 'expense' && !c.hidden) || {}).id || null;
   drawRec();
 }
@@ -619,6 +743,7 @@ function drawRec(){
     <div class="field"><label>分類</label><select id="r_cat">
       ${cats.map(c => `<option value="${c.id}" ${c.id===rm.catId?'selected':''}>${esc(c.icon)} ${esc(c.name)}</option>`).join('')}
       <option value="" ${rm.catId===null?'selected':''}>❓ 未分類</option></select></div>
+    <div class="field"><label>帳戶</label><select id="r_acc">${accOptions(rm.accId || defaultAcc().id)}</select></div>
     <div class="field"><label>備註</label><input id="r_note" value="${esc(rm.note)}" placeholder="例如：房租"></div>
     <div class="field"><label>頻率</label><select id="r_freq" onchange="recFreq(this.value)">
       <option value="yearly" ${rm.freq==='yearly'?'selected':''}>每年</option>
@@ -641,6 +766,7 @@ function drawRec(){
 function syncRec(){
   rm.amount = $('r_amt').value; rm.note = $('r_note').value; rm.start = $('r_start').value || rm.start;
   rm.catId = $('r_cat').value || null;
+  rm.accId = $('r_acc').value;
   if($('r_day')) rm.day = parseInt($('r_day').value) || 0;
   if($('r_month')) rm.month = parseInt($('r_month').value) || 1;
 }
@@ -654,7 +780,7 @@ function saveRec(){
   const amount = parseFloat(rm.amount);
   if(!(amount > 0)){ toast('請輸入金額'); return; }
   if((rm.freq === 'monthly' || rm.freq === 'yearly') && !(rm.day >= 1 && rm.day <= 31)){ toast('日期請填 1–31'); return; }
-  const rule = {id:rm.id || uid(), type:rm.type, amount, catId:rm.catId, note:rm.note, freq:rm.freq,
+  const rule = {id:rm.id || uid(), type:rm.type, amount, catId:rm.catId, accId:rm.accId, note:rm.note, freq:rm.freq,
                 day:rm.freq === 'daily' ? 0 : rm.day, month:rm.freq === 'yearly' ? rm.month : null,
                 start:rm.start, last:null};
   if(rm.id){
@@ -710,12 +836,17 @@ function zipStore(files, mime){
 function exportXlsx(){
   const x = s => esc(String(s ?? '').replace(/[\x00-\x08\x0b\x0c\x0e-\x1f]/g, ''));
   const str = (ref, v, s) => `<c r="${ref}" t="inlineStr"${s ? ` s="${s}"` : ''}><is><t>${x(v)}</t></is></c>`;
-  const head = ['日期','類型','分類','金額','備註'];
+  const head = ['日期','類型','分類','帳戶','金額','備註'];
+  const L = 'ABCDEF';
+  const typeName = {expense:'支出', income:'收入', transfer:'轉帳'};
   const recs = [...db.records].sort((a,b) => a.date.localeCompare(b.date));
-  const rows = [`<row r="1">${head.map((h,i) => str('ABCDE'[i] + 1, h, 1)).join('')}</row>`]
-    .concat(recs.map((r,i) => { const n = i + 2; return `<row r="${n}">` +
-      str('A'+n, r.date) + str('B'+n, r.type === 'expense' ? '支出' : '收入') + str('C'+n, cat(r.catId).name) +
-      `<c r="D${n}"><v>${r.amount}</v></c>` + str('E'+n, r.note) + '</row>'; }));
+  const rows = [`<row r="1">${head.map((h,i) => str(L[i] + 1, h, 1)).join('')}</row>`]
+    .concat(recs.map((r,i) => {
+      const n = i + 2, isT = r.type === 'transfer', to = isT ? acc(r.toAccId) : null;
+      return `<row r="${n}">` + str('A'+n, r.date) + str('B'+n, typeName[r.type] || r.type) + str('C'+n, isT ? '' : cat(r.catId).name)
+        + str('D'+n, isT ? `${accOf(r).name} → ${to ? to.name : ''}` : accOf(r).name)
+        + `<c r="E${n}"><v>${r.amount}</v></c>` + str('F'+n, r.note) + '</row>';
+    }));
   const NS = 'http://schemas.openxmlformats.org/spreadsheetml/2006/main';
   const REL = 'http://schemas.openxmlformats.org/officeDocument/2006/relationships';
   const head0 = '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n';
@@ -725,7 +856,7 @@ function exportXlsx(){
     {name:'xl/workbook.xml', text:head0 + `<workbook xmlns="${NS}" xmlns:r="${REL}"><sheets><sheet name="記帳明細" sheetId="1" r:id="rId1"/></sheets></workbook>`},
     {name:'xl/_rels/workbook.xml.rels', text:head0 + `<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="${REL}/worksheet" Target="worksheets/sheet1.xml"/><Relationship Id="rId2" Type="${REL}/styles" Target="styles.xml"/></Relationships>`},
     {name:'xl/styles.xml', text:head0 + `<styleSheet xmlns="${NS}"><fonts count="2"><font><sz val="11"/><name val="Calibri"/></font><font><b/><sz val="11"/><name val="Calibri"/></font></fonts><fills count="2"><fill><patternFill patternType="none"/></fill><fill><patternFill patternType="gray125"/></fill></fills><borders count="1"><border><left/><right/><top/><bottom/><diagonal/></border></borders><cellStyleXfs count="1"><xf numFmtId="0" fontId="0" fillId="0" borderId="0"/></cellStyleXfs><cellXfs count="2"><xf numFmtId="0" fontId="0" fillId="0" borderId="0" xfId="0"/><xf numFmtId="0" fontId="1" fillId="0" borderId="0" xfId="0" applyFont="1"/></cellXfs></styleSheet>`},
-    {name:'xl/worksheets/sheet1.xml', text:head0 + `<worksheet xmlns="${NS}"><sheetViews><sheetView workbookViewId="0"><pane ySplit="1" topLeftCell="A2" activePane="bottomLeft" state="frozen"/></sheetView></sheetViews><cols><col min="1" max="1" width="13" customWidth="1"/><col min="2" max="2" width="8" customWidth="1"/><col min="3" max="3" width="14" customWidth="1"/><col min="4" max="4" width="12" customWidth="1"/><col min="5" max="5" width="30" customWidth="1"/></cols><sheetData>${rows.join('')}</sheetData></worksheet>`}
+    {name:'xl/worksheets/sheet1.xml', text:head0 + `<worksheet xmlns="${NS}"><sheetViews><sheetView workbookViewId="0"><pane ySplit="1" topLeftCell="A2" activePane="bottomLeft" state="frozen"/></sheetView></sheetViews><cols><col min="1" max="1" width="13" customWidth="1"/><col min="2" max="2" width="8" customWidth="1"/><col min="3" max="3" width="14" customWidth="1"/><col min="4" max="4" width="18" customWidth="1"/><col min="5" max="5" width="12" customWidth="1"/><col min="6" max="6" width="30" customWidth="1"/></cols><sheetData>${rows.join('')}</sheetData></worksheet>`}
   ], 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
   download(`記帳明細-${ymd(new Date())}.xlsx`, blob);
 }
@@ -736,7 +867,8 @@ $('file').addEventListener('change', async e => {
     const d = JSON.parse(await f.text());
     if(!Array.isArray(d.categories) || !Array.isArray(d.records)) throw 0;
     if(!confirm(`備份檔含 ${d.records.length} 筆記錄、${d.categories.length} 個分類。\n還原會取代目前所有資料，確定嗎？`)) return;
-    db = {categories:d.categories, records:d.records, budgets:d.budgets || {total:0,cats:{}}, recurring:d.recurring || []};
+    db = {categories:d.categories, records:d.records, budgets:d.budgets || {total:0,cats:{}}, recurring:d.recurring || [], accounts:d.accounts};
+    ensureAccounts();
     save(); st.draft = newDraft('expense'); render(); toast('已還原');
   }catch(err){ toast('這不是有效的備份檔'); }
 });
@@ -745,7 +877,7 @@ $('file').addEventListener('change', async e => {
 window.App = {
   get db(){ return db; }, set db(v){ db = v; },
   get tab(){ return st.tab; },
-  save, render, toast, runRecurring, DEFAULT_CATS
+  save, render, toast, runRecurring, ensureAccounts, DEFAULT_CATS
 };
 
 /* ---------- 啟動 ---------- */
@@ -784,7 +916,7 @@ const clean = o => JSON.parse(JSON.stringify(o));
 const stable = v => JSON.stringify(v, (k, x) =>
   x && typeof x === 'object' && !Array.isArray(x)
     ? Object.fromEntries(Object.entries(x).sort(([a], [b]) => a < b ? -1 : 1)) : x);
-const settingsOf = d => clean({categories:d.categories, budgets:d.budgets, recurring:d.recurring});
+const settingsOf = d => clean({categories:d.categories, budgets:d.budgets, recurring:d.recurring, accounts:d.accounts});
 
 function refresh(){ if(!S.ready || App.tab !== 'add') App.render(); }   // 記帳頁輸入中不重畫，避免打字被打斷
 function fail(e){ S.status = 'error'; S.msg = e.code || e.message; refresh(); App.toast('同步失敗：' + S.msg); }
@@ -816,11 +948,13 @@ function onData(){
       localBefore.records.forEach(r => { if(!ids.has(r.id)) recs.push(r); });
     }
     App.db = {...clean(setData || settingsOf(localBefore)), records:recs};
+    App.ensureAccounts();
     localStorage.setItem('ledger.linked', uid);
     localStorage.setItem('ledger.uid', uid);
     ready = true;
   } else {
     App.db = {...clean(setData || settingsOf(App.db)), records:recsData};
+    App.ensureAccounts();
   }
   App.save(true);
   S.status = 'on'; S.msg = ''; S.ready = true;
