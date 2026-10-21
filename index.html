@@ -266,6 +266,7 @@ function vAdd(){
     <button class="${d.type==='income'?'on':''}" onclick="setType('income')">收入</button>
     <button class="${isT?'on':''}" onclick="setType('transfer')">轉帳</button>
   </div>
+  ${budgetBanner()}
   <div class="amount ${d.type==='expense'?'exp':d.type==='income'?'inc':''}" id="amt">${amtText()}</div>
   ${isT ? `<div class="card">
       <div class="row field"><span class="sub" style="width:48px">轉出</span><select onchange="st.draft.accId=this.value">${accOptions(d.accId)}</select></div>
@@ -277,7 +278,7 @@ function vAdd(){
   <div class="row field"><span class="sub" style="width:48px">帳戶</span>
     <select onchange="st.draft.accId=this.value;rememberAcc(this.value)">${accOptions(d.accId)}</select></div>`}
   <div class="row field">
-    <input type="date" value="${d.date}" onchange="st.draft.date=this.value||st.draft.date" style="flex:1">
+    <input type="date" value="${d.date}" onchange="st.draft.date=this.value||st.draft.date;render()" style="flex:1">
     <input type="text" placeholder="備註" value="${esc(d.note)}" oninput="st.draft.note=this.value" style="flex:2">
   </div>
   <div class="pad">
@@ -390,11 +391,7 @@ function vList(){
   const inc = sumBy(st.month,'income').total, exp = sumBy(st.month,'expense').total;
   const days = {};
   recs.forEach(r => (days[r.date] = days[r.date] || []).push(r));
-  const tt = totals();
-  return `<div class="card sum" style="grid-template-columns:repeat(2,1fr);cursor:pointer" onclick="go('acc')">
-    <div><span class="sub">帳戶總額</span><b>${money(tt.all)}</b></div>
-    <div><span class="sub">現金總額</span><b>${money(tt.cash)}</b></div>
-  </div>` + monthNav() + `
+  return monthNav() + `
   <div class="card sum">
     <div><span class="sub">收入</span><b class="inc">${money(inc)}</b></div>
     <div><span class="sub">支出</span><b class="exp">${money(exp)}</b></div>
@@ -511,15 +508,27 @@ function budgetCard(){
   if(!items.length) return `<div class="card row"><span class="sub sp">還沒設定預算</span>
     <button class="btn sm" onclick="budgetModal()">設定預算</button></div>`;
   return `<div class="card"><div class="row"><b class="sp">預算</b><button class="btn sm" onclick="budgetModal()">調整</button></div>
-    ${items.map(it => {
-      const p = it.used/it.limit;
-      const color = p>=1 ? 'var(--danger)' : p>=0.8 ? 'var(--warn)' : 'var(--accent)';
-      const left = it.limit - it.used;
-      return `<div style="margin-top:12px"><div class="row"><span>${esc(it.label)}</span><span class="sp"></span>
-        <span class="sub">${money(it.used)} / ${money(it.limit)}</span></div>
-        <div class="bar"><span style="width:${Math.min(100,p*100)}%;background:${color}"></span></div>
-        <div class="sub" style="color:${p>=1?'var(--danger)':'var(--sub)'}">${left>=0?'剩餘 '+money(left):'超出 '+money(-left)}</div></div>`;
-    }).join('')}</div>`;
+    ${items.map(it => budgetBar(it.label, it.used, it.limit)).join('')}</div>`;
+}
+function budgetBar(label, used, limit){
+  const p = used / limit;
+  const color = p >= 1 ? 'var(--danger)' : p >= 0.8 ? 'var(--warn)' : 'var(--accent)';
+  const left = limit - used;
+  return `<div style="margin-top:12px"><div class="row"><span>${esc(label)}</span><span class="sp"></span>
+    <span class="sub">${money(used)} / ${money(limit)}</span></div>
+    <div class="bar"><span style="width:${Math.min(100, p * 100)}%;background:${color}"></span></div>
+    <div class="sub" style="color:${p >= 1 ? 'var(--danger)' : 'var(--sub)'}">${left >= 0 ? '剩餘 ' + money(left) : '超出 ' + money(-left)}</div></div>`;
+}
+// 記帳頁上方：依記帳日期所在的月份，顯示總預算，以及目前選的分類預算
+function budgetBanner(){
+  const d = st.draft;
+  if(d.type !== 'expense') return '';
+  const s = sumBy(d.date.slice(0, 7), 'expense');
+  let h = '';
+  if(db.budgets.total) h += budgetBar('💰 本月總預算', s.total, db.budgets.total);
+  const lim = d.catId && db.budgets.cats[d.catId];
+  if(lim){ const c = cat(d.catId); h += budgetBar(`${c.icon} ${c.name}預算`, s.by[d.catId] || 0, lim); }
+  return h ? `<div class="card" style="padding:2px 14px 12px">${h}</div>` : '';
 }
 function budgetModal(){
   const ex = db.categories.filter(c => c.type === 'expense');
