@@ -1,0 +1,597 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#2f9e6e">
+<link rel="manifest" href="manifest.json">
+<link rel="icon" href="icon.svg">
+<link rel="apple-touch-icon" href="icon.svg">
+<title>輕鬆記帳</title>
+<style>
+:root{
+  --bg:#f4f6f5;--card:#fff;--text:#1d2b25;--sub:#6b7a73;--line:#e3e8e5;
+  --accent:#2f9e6e;--accent-text:#fff;--expense:#e0533d;--income:#2f9e6e;
+  --warn:#f09a2b;--danger:#d64545;--chip:#edf1ef;
+}
+@media (prefers-color-scheme:dark){
+  :root{--bg:#111815;--card:#1a2420;--text:#e8efeb;--sub:#8fa098;--line:#2a3731;
+    --accent:#3fbf86;--accent-text:#0c1511;--expense:#f0705a;--income:#3fbf86;--chip:#24302a}
+}
+*{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
+html,body{margin:0;background:var(--bg);color:var(--text);font:16px/1.4 system-ui,-apple-system,"Noto Sans TC","Microsoft JhengHei",sans-serif}
+#app{max-width:480px;margin:0 auto;min-height:100vh;padding:12px 16px calc(84px + env(safe-area-inset-bottom))}
+h2{font-size:1.05rem;margin:18px 0 8px}
+button{font:inherit;color:inherit;cursor:pointer}
+input,select{font:inherit;color:var(--text);background:var(--card);border:1px solid var(--line);border-radius:10px;padding:10px 12px;width:100%}
+.card{background:var(--card);border-radius:14px;padding:14px;margin-bottom:12px;border:1px solid var(--line)}
+.row{display:flex;align-items:center;gap:10px}
+.sp{flex:1}
+.sub{color:var(--sub);font-size:.85rem}
+.exp{color:var(--expense)}.inc{color:var(--income)}
+.btn{background:var(--chip);border:0;border-radius:10px;padding:10px 14px}
+.btn.pri{background:var(--accent);color:var(--accent-text);font-weight:600}
+.btn.dng{color:var(--danger)}
+.btn.sm{padding:6px 10px;font-size:.85rem}
+.seg{display:flex;background:var(--chip);border-radius:12px;padding:3px;margin-bottom:12px}
+.seg button{flex:1;border:0;background:none;padding:8px;border-radius:9px}
+.seg button.on{background:var(--card);font-weight:600;box-shadow:0 1px 3px rgba(0,0,0,.12)}
+nav{position:fixed;left:0;right:0;bottom:0;background:var(--card);border-top:1px solid var(--line);display:flex;justify-content:center;padding-bottom:env(safe-area-inset-bottom)}
+nav div{display:flex;width:100%;max-width:480px}
+nav button{flex:1;border:0;background:none;padding:8px 0 10px;color:var(--sub);font-size:.75rem}
+nav button b{display:block;font-size:1.4rem;font-weight:400}
+nav button.on{color:var(--accent);font-weight:600}
+.amount{text-align:right;font-size:2.4rem;font-weight:700;padding:6px 4px;word-break:break-all}
+.cats{display:grid;grid-template-columns:repeat(4,1fr);gap:8px;margin:8px 0}
+.cat{border:2px solid transparent;background:var(--card);border-radius:12px;padding:8px 2px;text-align:center;font-size:.8rem;border-color:var(--line)}
+.cat i{display:block;font-style:normal;font-size:1.5rem}
+.cat.on{border-color:var(--accent);background:var(--chip)}
+.pad{display:grid;grid-template-columns:repeat(4,1fr);gap:8px;margin:10px 0}
+.pad button{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:12px 0;font-size:1.25rem}
+.pad .save{grid-row:span 4;grid-column:4;background:var(--accent);color:var(--accent-text);font-weight:700;border:0}
+.item{display:flex;align-items:center;gap:12px;padding:10px 0;border-bottom:1px solid var(--line);cursor:pointer}
+.item:last-child{border:0}
+.ico{width:38px;height:38px;border-radius:50%;display:grid;place-items:center;font-size:1.2rem;flex:none}
+.day{display:flex;justify-content:space-between;color:var(--sub);font-size:.85rem;margin:14px 2px 4px}
+.month{display:flex;align-items:center;justify-content:center;gap:16px;margin-bottom:10px;font-weight:600}
+.month button{background:none;border:0;font-size:1.3rem;padding:4px 12px}
+.sum{display:grid;grid-template-columns:repeat(3,1fr);text-align:center;gap:4px}
+.sum b{display:block;font-size:1.1rem}
+.bar{height:8px;background:var(--chip);border-radius:6px;overflow:hidden;margin-top:6px}
+.bar span{display:block;height:100%;border-radius:6px}
+.empty{text-align:center;color:var(--sub);padding:28px 0}
+#modal{position:fixed;inset:0;background:rgba(0,0,0,.45);display:none;align-items:flex-end;justify-content:center;z-index:10}
+#modal.show{display:flex}
+#modal .box{background:var(--bg);width:100%;max-width:480px;max-height:90vh;overflow:auto;border-radius:18px 18px 0 0;padding:16px 16px calc(16px + env(safe-area-inset-bottom))}
+.field{margin-bottom:12px}
+.field label{display:block;font-size:.85rem;color:var(--sub);margin-bottom:4px}
+.emojis,.colors{display:flex;flex-wrap:wrap;gap:6px}
+.emojis button{width:40px;height:40px;font-size:1.3rem;border:2px solid transparent;background:var(--chip);border-radius:10px;padding:0}
+.colors button{width:30px;height:30px;border-radius:50%;border:3px solid transparent;padding:0}
+.emojis button.on,.colors button.on{border-color:var(--text)}
+#toast{position:fixed;left:50%;bottom:96px;transform:translateX(-50%);background:#222;color:#fff;padding:10px 16px;border-radius:20px;font-size:.9rem;display:none;z-index:20;max-width:90%;text-align:center}
+.tag{display:inline-block;background:var(--chip);border-radius:6px;padding:1px 7px;font-size:.75rem;color:var(--sub);margin-left:6px}
+</style>
+</head>
+<body>
+<div id="app"></div>
+<nav><div id="nav"></div></nav>
+<div id="modal"><div class="box" id="box"></div></div>
+<div id="toast"></div>
+<input type="file" id="file" accept="application/json,.json" hidden>
+<script>
+'use strict';
+const KEY = 'ledger.v1';
+const COLORS = ['#e0533d','#f09a2b','#e8c43c','#7cb342','#2f9e6e','#2aa6b5','#3f7fd9','#7a5cd6','#c25cc0','#9aa0a6'];
+const EMOJIS = ['🍜','🍱','☕','🛒','🚌','🚗','⛽','🏠','💡','📱','🎮','🎬','✈️','👕','💊','🏥','📚','🎓','🐶','🎁','💇','🏋️','👶','🧾','💰','🧧','📈','💼','🪙','✨','❤️','📦'];
+const DEFAULT_CATS = [
+  ['e_food','餐飲','🍜','#e0533d','expense'],['e_traffic','交通','🚌','#3f7fd9','expense'],
+  ['e_shop','購物','🛒','#c25cc0','expense'],['e_fun','娛樂','🎮','#7a5cd6','expense'],
+  ['e_home','居家','🏠','#f09a2b','expense'],['e_med','醫療','💊','#2aa6b5','expense'],
+  ['e_edu','教育','📚','#7cb342','expense'],['e_other','其他支出','📦','#9aa0a6','expense'],
+  ['i_salary','薪資','💼','#2f9e6e','income'],['i_bonus','獎金','🧧','#e8c43c','income'],
+  ['i_other','其他收入','💰','#9aa0a6','income']
+].map(([id,name,icon,color,type]) => ({id,name,icon,color,type,hidden:false}));
+const NONE = {id:null,name:'未分類',icon:'❓',color:'#9aa0a6'};
+
+let db = load();
+let st = {tab:'add', month:ym(new Date()), statType:'expense', catTab:'expense',
+          draft:newDraft('expense')};
+
+/* ---------- 資料 ---------- */
+function load(){
+  try{
+    const d = JSON.parse(localStorage.getItem(KEY));
+    if(d && d.categories && d.records) return d;
+  }catch(e){}
+  return {categories:structuredClone(DEFAULT_CATS), records:[], budgets:{total:0,cats:{}}, recurring:[]};
+}
+function save(){
+  try{ localStorage.setItem(KEY, JSON.stringify(db)); }
+  catch(e){ toast('儲存失敗，請先匯出備份'); }
+}
+const uid = () => Date.now().toString(36) + Math.random().toString(36).slice(2,6);
+const cat = id => db.categories.find(c => c.id === id) || NONE;
+const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+const money = n => '$' + Number(n).toLocaleString('zh-TW', {maximumFractionDigits:2});
+const $ = id => document.getElementById(id);
+
+/* ---------- 日期 ---------- */
+function p2(n){ return String(n).padStart(2,'0'); }
+function ymd(d){ return d.getFullYear() + '-' + p2(d.getMonth()+1) + '-' + p2(d.getDate()); }
+function ym(d){ return d.getFullYear() + '-' + p2(d.getMonth()+1); }
+function parse(s){ const [y,m,d] = s.split('-').map(Number); return new Date(y, m-1, d); }
+function shiftMonth(m, k){ const [y,mo] = m.split('-').map(Number); return ym(new Date(y, mo-1+k, 1)); }
+const WEEK = ['日','一','二','三','四','五','六'];
+function dayLabel(s){ const d = parse(s); return `${d.getMonth()+1}/${d.getDate()}（${WEEK[d.getDay()]}）`; }
+
+/* ---------- 定期收支 ---------- */
+function runRecurring(){
+  const today = new Date(); today.setHours(0,0,0,0);
+  let added = 0;
+  for(const r of db.recurring){
+    let cur = r.last ? parse(r.last) : parse(r.start);
+    if(r.last) cur.setDate(cur.getDate()+1);
+    if(cur > today) continue;
+    for(; cur <= today; cur.setDate(cur.getDate()+1)){
+      const dim = new Date(cur.getFullYear(), cur.getMonth()+1, 0).getDate();
+      const hit = r.freq === 'daily' || (r.freq === 'weekly' && cur.getDay() === r.day)
+               || (r.freq === 'monthly' && cur.getDate() === Math.min(r.day, dim));
+      const date = ymd(cur);
+      if(hit && !db.records.some(x => x.ruleId === r.id && x.date === date)){
+        db.records.push({id:uid(), type:r.type, amount:r.amount, catId:r.catId, date, note:r.note, ruleId:r.id});
+        added++;
+      }
+    }
+    r.last = ymd(today);
+  }
+  if(added){ save(); toast(`已自動加入 ${added} 筆定期收支`); }
+}
+
+/* ---------- 畫面骨架 ---------- */
+function newDraft(type){
+  const first = db.categories.find(c => c.type === type && !c.hidden);
+  return {type, amount:'', catId:first ? first.id : null, date:ymd(new Date()), note:'', editId:null};
+}
+const TABS = [['add','✏️','記帳'],['list','📋','明細'],['stats','📊','統計'],['set','⚙️','設定']];
+function render(){
+  $('nav').innerHTML = TABS.map(([k,i,n]) =>
+    `<button class="${st.tab===k?'on':''}" onclick="go('${k}')"><b>${i}</b>${n}</button>`).join('');
+  $('app').innerHTML = {add:vAdd, list:vList, stats:vStats, set:vSet}[st.tab]();
+}
+function go(tab){
+  if(tab === 'add' && st.tab !== 'add' && !st.draft.editId) st.draft = newDraft(st.draft.type);
+  st.tab = tab; render(); scrollTo(0,0);
+}
+function toast(msg){
+  const t = $('toast'); t.textContent = msg; t.style.display = 'block';
+  clearTimeout(toast.t); toast.t = setTimeout(() => t.style.display = 'none', 2600);
+}
+function openModal(html){ $('box').innerHTML = html; $('modal').classList.add('show'); }
+function closeModal(){ $('modal').classList.remove('show'); }
+$('modal').addEventListener('click', e => { if(e.target.id === 'modal') closeModal(); });
+
+/* ---------- 記帳 ---------- */
+function vAdd(){
+  const d = st.draft;
+  const cats = db.categories.filter(c => c.type === d.type && (!c.hidden || c.id === d.catId));
+  return `
+  <div class="seg">
+    <button class="${d.type==='expense'?'on':''}" onclick="setType('expense')">支出</button>
+    <button class="${d.type==='income'?'on':''}" onclick="setType('income')">收入</button>
+  </div>
+  <div class="amount ${d.type==='expense'?'exp':'inc'}" id="amt">${amtText()}</div>
+  <div class="cats">${cats.map(c => `
+    <button class="cat ${c.id===d.catId?'on':''}" onclick="pickCat('${c.id}')"><i>${esc(c.icon)}</i>${esc(c.name)}</button>`).join('')}
+    <button class="cat ${d.catId===null?'on':''}" onclick="pickCat(null)"><i>❓</i>未分類</button>
+  </div>
+  <div class="row field">
+    <input type="date" value="${d.date}" onchange="st.draft.date=this.value||st.draft.date" style="flex:1">
+    <input type="text" placeholder="備註" value="${esc(d.note)}" oninput="st.draft.note=this.value" style="flex:2">
+  </div>
+  <div class="pad">
+    ${[7,8,9].map(k=>`<button onclick="key('${k}')">${k}</button>`).join('')}<button onclick="key('<')">⌫</button>
+    ${[4,5,6].map(k=>`<button onclick="key('${k}')">${k}</button>`).join('')}
+    <button class="save" onclick="saveRecord()">${d.editId?'更新':'儲存'}</button>
+    ${[1,2,3].map(k=>`<button onclick="key('${k}')">${k}</button>`).join('')}
+    <button onclick="key('0')">0</button><button onclick="key('00')">00</button><button onclick="key('.')">.</button>
+  </div>
+  ${d.editId ? `<div class="row">
+    <button class="btn" onclick="cancelEdit()">取消編輯</button><span class="sp"></span>
+    <button class="btn dng" onclick="delRecord('${d.editId}')">刪除這筆</button></div>` : ''}`;
+}
+function amtText(){ return money(st.draft.amount === '' ? 0 : st.draft.amount.replace(/\.$/,'')) + (st.draft.amount.endsWith('.') ? '.' : ''); }
+function setType(t){ st.draft = {...newDraft(t), date:st.draft.date, note:st.draft.note, amount:st.draft.amount, editId:st.draft.editId}; render(); }
+function pickCat(id){ st.draft.catId = id; render(); }
+function key(k){
+  let a = st.draft.amount;
+  if(k === '<') a = a.slice(0,-1);
+  else if(k === '.'){ if(!a.includes('.')) a = (a || '0') + '.'; }
+  else {
+    if(a.includes('.') && a.split('.')[1].length >= 2) return;
+    if(a === '0' && k !== '00') a = '';
+    if(a === '' && k === '00') return;
+    if(a.replace('.','').length >= 10) return;
+    a += k;
+  }
+  st.draft.amount = a; $('amt').textContent = amtText();
+}
+function saveRecord(){
+  const d = st.draft, amount = parseFloat(d.amount);
+  if(!(amount > 0)){ toast('請輸入金額'); return; }
+  if(d.editId){
+    const r = db.records.find(x => x.id === d.editId);
+    Object.assign(r, {type:d.type, amount, catId:d.catId, date:d.date, note:d.note});
+  } else {
+    db.records.push({id:uid(), type:d.type, amount, catId:d.catId, date:d.date, note:d.note});
+  }
+  save();
+  const wasEdit = !!d.editId;
+  const warn = d.type === 'expense' ? budgetWarning(d.date.slice(0,7), d.catId) : '';
+  st.draft = newDraft(d.type);
+  if(wasEdit){ st.tab = 'list'; }
+  render();
+  toast(warn || (wasEdit ? '已更新' : '已記一筆'));
+}
+function cancelEdit(){ st.draft = newDraft(st.draft.type); st.tab = 'list'; render(); }
+function delRecord(id){
+  if(!confirm('確定刪除這筆記錄？')) return;
+  db.records = db.records.filter(r => r.id !== id); save();
+  st.draft = newDraft(st.draft.type); st.tab = 'list'; render(); toast('已刪除');
+}
+function budgetWarning(month, catId){
+  const spent = sumBy(month, 'expense');
+  const msgs = [];
+  const chk = (label, used, limit) => {
+    if(!limit) return;
+    const p = used / limit;
+    if(p >= 1) msgs.push(`${label}已超出預算`);
+    else if(p >= 0.8) msgs.push(`${label}已用 ${Math.round(p*100)}%`);
+  };
+  chk('本月總預算', spent.total, db.budgets.total);
+  if(catId) chk(cat(catId).name + '預算', spent.by[catId] || 0, db.budgets.cats[catId]);
+  return msgs.join('，');
+}
+
+/* ---------- 明細 ---------- */
+function monthRecords(m){ return db.records.filter(r => r.date.startsWith(m)); }
+function sumBy(m, type){
+  const by = {}; let total = 0;
+  for(const r of monthRecords(m)) if(r.type === type){ total += r.amount; by[r.catId] = (by[r.catId]||0) + r.amount; }
+  return {total, by};
+}
+function monthNav(){
+  const [y,m] = st.month.split('-');
+  return `<div class="month"><button onclick="moveMonth(-1)">‹</button>${y} 年 ${+m} 月<button onclick="moveMonth(1)">›</button></div>`;
+}
+function moveMonth(k){ st.month = shiftMonth(st.month, k); render(); }
+function vList(){
+  const recs = monthRecords(st.month).sort((a,b) => b.date.localeCompare(a.date) || b.id.localeCompare(a.id));
+  const inc = sumBy(st.month,'income').total, exp = sumBy(st.month,'expense').total;
+  const days = {};
+  recs.forEach(r => (days[r.date] = days[r.date] || []).push(r));
+  return monthNav() + `
+  <div class="card sum">
+    <div><span class="sub">收入</span><b class="inc">${money(inc)}</b></div>
+    <div><span class="sub">支出</span><b class="exp">${money(exp)}</b></div>
+    <div><span class="sub">結餘</span><b>${money(inc-exp)}</b></div>
+  </div>` + (recs.length ? Object.keys(days).map(date => {
+    const list = days[date];
+    const net = list.reduce((s,r) => s + (r.type==='income' ? r.amount : -r.amount), 0);
+    return `<div class="day"><span>${dayLabel(date)}</span><span>${net<0?'-':''}${money(Math.abs(net))}</span></div>
+    <div class="card" style="padding:4px 14px">${list.map(r => { const c = cat(r.catId); return `
+      <div class="item" onclick="editRecord('${r.id}')">
+        <div class="ico" style="background:${c.color}33">${esc(c.icon)}</div>
+        <div class="sp"><div>${esc(c.name)}${r.ruleId?'<span class="tag">定期</span>':''}</div>
+          ${r.note?`<div class="sub">${esc(r.note)}</div>`:''}</div>
+        <b class="${r.type==='expense'?'exp':'inc'}">${r.type==='expense'?'-':'+'}${money(r.amount)}</b>
+      </div>`; }).join('')}</div>`;
+  }).join('') : '<div class="empty">這個月還沒有記錄</div>');
+}
+function editRecord(id){
+  const r = db.records.find(x => x.id === id);
+  st.draft = {type:r.type, amount:String(r.amount), catId:r.catId, date:r.date, note:r.note||'', editId:id};
+  st.tab = 'add'; render(); scrollTo(0,0);
+}
+
+/* ---------- 統計與預算 ---------- */
+function vStats(){
+  const s = sumBy(st.month, st.statType);
+  const rows = Object.entries(s.by).map(([id,v]) => ({c:cat(id==='null'?null:id), v})).sort((a,b) => b.v - a.v);
+  return monthNav() + `
+  <div class="seg">
+    <button class="${st.statType==='expense'?'on':''}" onclick="st.statType='expense';render()">支出</button>
+    <button class="${st.statType==='income'?'on':''}" onclick="st.statType='income';render()">收入</button>
+  </div>
+  ${st.statType==='expense' ? budgetCard() : ''}
+  <div class="card">
+    <div class="row" style="align-items:center">
+      ${donut(rows, s.total)}
+      <div class="sp"><div class="sub">本月${st.statType==='expense'?'支出':'收入'}</div><b style="font-size:1.3rem">${money(s.total)}</b></div>
+    </div>
+    ${rows.length ? rows.map(r => `
+      <div style="margin-top:12px"><div class="row"><span>${esc(r.c.icon)} ${esc(r.c.name)}</span><span class="sp"></span>
+        <span class="sub">${Math.round(r.v/s.total*100)}%</span><b>${money(r.v)}</b></div>
+        <div class="bar"><span style="width:${r.v/s.total*100}%;background:${r.c.color}"></span></div></div>`).join('')
+      : '<div class="empty">沒有資料</div>'}
+  </div>
+  <h2>近 6 個月</h2>
+  <div class="card">${bars()}</div>`;
+}
+function donut(rows, total){
+  const R = 40, C = 2*Math.PI*R;
+  let off = 0;
+  const segs = total ? rows.map(r => {
+    const len = r.v/total*C;
+    const el = `<circle cx="50" cy="50" r="${R}" fill="none" stroke="${r.c.color}" stroke-width="16"
+      stroke-dasharray="${len} ${C-len}" stroke-dashoffset="${-off}" transform="rotate(-90 50 50)"/>`;
+    off += len; return el;
+  }).join('') : '';
+  return `<svg viewBox="0 0 100 100" width="120" height="120" role="img" aria-label="分類占比圖">
+    <circle cx="50" cy="50" r="${R}" fill="none" stroke="var(--chip)" stroke-width="16"/>${segs}</svg>`;
+}
+function bars(){
+  const ms = Array.from({length:6}, (_,i) => shiftMonth(ym(new Date()), i-5));
+  const data = ms.map(m => ({m, i:sumBy(m,'income').total, e:sumBy(m,'expense').total}));
+  const max = Math.max(1, ...data.flatMap(d => [d.i, d.e]));
+  const H = 110;
+  return `<svg viewBox="0 0 300 ${H+34}" width="100%" role="img" aria-label="近六個月收支長條圖">
+    ${data.map((d,k) => {
+      const x = k*50 + 6, hi = d.i/max*H, he = d.e/max*H;
+      return `<rect x="${x}" y="${H-hi}" width="17" height="${hi}" rx="3" fill="var(--income)"/>
+        <rect x="${x+19}" y="${H-he}" width="17" height="${he}" rx="3" fill="var(--expense)"/>
+        <text x="${x+18}" y="${H+16}" font-size="11" text-anchor="middle" fill="var(--sub)">${+d.m.slice(5)}月</text>`;
+    }).join('')}
+  </svg>
+  <div class="row sub" style="justify-content:center;gap:16px">
+    <span><span class="inc">■</span> 收入</span><span><span class="exp">■</span> 支出</span></div>`;
+}
+function budgetCard(){
+  const s = sumBy(st.month, 'expense');
+  const items = [];
+  if(db.budgets.total) items.push({label:'💰 本月總預算', used:s.total, limit:db.budgets.total});
+  for(const [id,limit] of Object.entries(db.budgets.cats)){
+    const c = db.categories.find(x => x.id === id);
+    if(c && limit) items.push({label:`${c.icon} ${c.name}`, used:s.by[id]||0, limit});
+  }
+  if(!items.length) return `<div class="card row"><span class="sub sp">還沒設定預算</span>
+    <button class="btn sm" onclick="budgetModal()">設定預算</button></div>`;
+  return `<div class="card"><div class="row"><b class="sp">預算</b><button class="btn sm" onclick="budgetModal()">調整</button></div>
+    ${items.map(it => {
+      const p = it.used/it.limit;
+      const color = p>=1 ? 'var(--danger)' : p>=0.8 ? 'var(--warn)' : 'var(--accent)';
+      const left = it.limit - it.used;
+      return `<div style="margin-top:12px"><div class="row"><span>${esc(it.label)}</span><span class="sp"></span>
+        <span class="sub">${money(it.used)} / ${money(it.limit)}</span></div>
+        <div class="bar"><span style="width:${Math.min(100,p*100)}%;background:${color}"></span></div>
+        <div class="sub" style="color:${p>=1?'var(--danger)':'var(--sub)'}">${left>=0?'剩餘 '+money(left):'超出 '+money(-left)}</div></div>`;
+    }).join('')}</div>`;
+}
+function budgetModal(){
+  const ex = db.categories.filter(c => c.type === 'expense');
+  openModal(`<h2 style="margin-top:0">預算設定（每月）</h2>
+    <div class="field"><label>每月總預算（留空或 0 表示不設）</label>
+      <input id="b_total" type="number" inputmode="decimal" min="0" value="${db.budgets.total||''}"></div>
+    <div class="sub" style="margin-bottom:6px">分類預算</div>
+    ${ex.map(c => `<div class="row field"><span style="width:110px">${esc(c.icon)} ${esc(c.name)}</span>
+      <input id="b_${c.id}" type="number" inputmode="decimal" min="0" value="${db.budgets.cats[c.id]||''}"></div>`).join('')}
+    <div class="row"><button class="btn sp" onclick="closeModal()">取消</button>
+      <button class="btn pri sp" onclick="saveBudget()">儲存</button></div>`);
+}
+function saveBudget(){
+  const num = id => Math.max(0, parseFloat($(id).value) || 0);
+  db.budgets.total = num('b_total');
+  db.budgets.cats = {};
+  db.categories.filter(c => c.type === 'expense').forEach(c => { const v = num('b_'+c.id); if(v) db.budgets.cats[c.id] = v; });
+  save(); closeModal(); render(); toast('預算已儲存');
+}
+
+/* ---------- 設定 ---------- */
+function vSet(){
+  const list = db.categories.filter(c => c.type === st.catTab);
+  return `
+  <h2>分類管理</h2>
+  <div class="seg">
+    <button class="${st.catTab==='expense'?'on':''}" onclick="st.catTab='expense';render()">支出分類</button>
+    <button class="${st.catTab==='income'?'on':''}" onclick="st.catTab='income';render()">收入分類</button>
+  </div>
+  <div class="card" style="padding:4px 14px">
+    ${list.map((c,i) => `<div class="item" style="cursor:default;${c.hidden?'opacity:.5':''}">
+      <div class="ico" style="background:${c.color}33">${esc(c.icon)}</div>
+      <div class="sp">${esc(c.name)}${c.hidden?'<span class="tag">已隱藏</span>':''}</div>
+      <button class="btn sm" ${i===0?'disabled':''} onclick="moveCat('${c.id}',-1)" aria-label="上移">▲</button>
+      <button class="btn sm" ${i===list.length-1?'disabled':''} onclick="moveCat('${c.id}',1)" aria-label="下移">▼</button>
+      <button class="btn sm" onclick="catModal('${c.id}')">編輯</button>
+    </div>`).join('') || '<div class="empty">沒有分類</div>'}
+  </div>
+  <div class="row"><button class="btn pri sp" onclick="catModal()">＋ 新增分類</button>
+    <button class="btn sp" onclick="restoreCats()">還原預設分類</button></div>
+
+  <h2>預算</h2>
+  <div class="card row"><span class="sp sub">${db.budgets.total ? '總預算 '+money(db.budgets.total) : '尚未設定'}</span>
+    <button class="btn sm" onclick="budgetModal()">設定</button></div>
+
+  <h2>定期收支</h2>
+  <div class="card" style="padding:4px 14px">
+    ${db.recurring.map(r => { const c = cat(r.catId); return `<div class="item" onclick="recModal('${r.id}')">
+      <div class="ico" style="background:${c.color}33">${esc(c.icon)}</div>
+      <div class="sp"><div>${esc(c.name)}${r.note?' · '+esc(r.note):''}</div><div class="sub">${recDesc(r)}</div></div>
+      <b class="${r.type==='expense'?'exp':'inc'}">${money(r.amount)}</b></div>`; }).join('')
+      || '<div class="empty">還沒有定期項目</div>'}
+  </div>
+  <button class="btn pri" style="width:100%" onclick="recModal()">＋ 新增定期收支</button>
+
+  <h2>備份與還原</h2>
+  <div class="card">
+    <div class="sub" style="margin-bottom:10px">資料只存在這支手機的瀏覽器裡。請定期匯出備份，再自行存到 Google Drive 等雲端硬碟。</div>
+    <div class="row">
+      <button class="btn sp" onclick="exportJson()">匯出備份 (JSON)</button>
+      <button class="btn sp" onclick="exportCsv()">匯出 CSV</button>
+    </div>
+    <button class="btn" style="width:100%;margin-top:8px" onclick="$('file').click()">從備份檔還原</button>
+  </div>`;
+}
+function moveCat(id, dir){
+  const same = db.categories.filter(c => c.type === st.catTab);
+  const i = same.findIndex(c => c.id === id), j = i + dir;
+  if(j < 0 || j >= same.length) return;
+  const a = db.categories.indexOf(same[i]), b = db.categories.indexOf(same[j]);
+  [db.categories[a], db.categories[b]] = [db.categories[b], db.categories[a]];
+  save(); render();
+}
+let cm = null;
+function catModal(id){
+  const c = id ? cat(id) : null;
+  cm = {id, type:c ? c.type : st.catTab, icon:c ? c.icon : EMOJIS[0], color:c ? c.color : COLORS[0]};
+  openModal(`<h2 style="margin-top:0">${c?'編輯分類':'新增'+(cm.type==='expense'?'支出':'收入')+'分類'}</h2>
+    <div class="field"><label>名稱</label><input id="c_name" maxlength="12" value="${esc(c?c.name:'')}"></div>
+    <div class="field"><label>圖示（點選或自行輸入 emoji）</label>
+      <input id="c_icon" maxlength="4" value="${esc(cm.icon)}" oninput="cm.icon=this.value;markEmoji()" style="margin-bottom:8px">
+      <div class="emojis" id="c_emojis">${EMOJIS.map(e => `<button onclick="cm.icon='${e}';$('c_icon').value='${e}';markEmoji()">${e}</button>`).join('')}</div></div>
+    <div class="field"><label>顏色</label>
+      <div class="colors" id="c_colors">${COLORS.map(k => `<button style="background:${k}" onclick="cm.color='${k}';markColor()"></button>`).join('')}</div></div>
+    ${c ? `<label class="row field"><input type="checkbox" id="c_hidden" style="width:auto" ${c.hidden?'checked':''}> 隱藏（記帳時不顯示，歷史資料保留）</label>` : ''}
+    <div class="row">
+      ${c ? `<button class="btn dng" onclick="delCat('${c.id}')">刪除</button>` : ''}
+      <span class="sp"></span><button class="btn" onclick="closeModal()">取消</button>
+      <button class="btn pri" onclick="saveCat()">儲存</button></div>`);
+  markEmoji(); markColor();
+}
+function markEmoji(){ [...$('c_emojis').children].forEach(b => b.classList.toggle('on', b.textContent === cm.icon)); }
+function markColor(){ [...$('c_colors').children].forEach((b,i) => b.classList.toggle('on', COLORS[i] === cm.color)); }
+function saveCat(){
+  const name = $('c_name').value.trim(), icon = ($('c_icon').value.trim() || '📦');
+  if(!name){ toast('請輸入名稱'); return; }
+  if(cm.id){
+    const c = db.categories.find(x => x.id === cm.id);
+    Object.assign(c, {name, icon, color:cm.color, hidden:$('c_hidden').checked});
+  } else {
+    db.categories.push({id:'c_'+uid(), name, icon, color:cm.color, type:cm.type, hidden:false});
+  }
+  save(); closeModal(); render();
+}
+function delCat(id){
+  const c = cat(id);
+  const nRec = db.records.filter(r => r.catId === id).length;
+  const nRule = db.recurring.filter(r => r.catId === id).length;
+  const others = db.categories.filter(x => x.type === c.type && x.id !== id);
+  openModal(`<h2 style="margin-top:0">刪除「${esc(c.name)}」</h2>
+    <p class="sub">此分類有 ${nRec} 筆記錄、${nRule} 個定期項目；它的分類預算會一併移除。請選擇這些記錄要移到哪裡：</p>
+    <div class="field"><select id="d_to"><option value="">未分類</option>
+      ${others.map(o => `<option value="${o.id}">${esc(o.icon)} ${esc(o.name)}</option>`).join('')}</select></div>
+    <div class="row"><button class="btn sp" onclick="closeModal()">取消</button>
+      <button class="btn dng sp" onclick="confirmDelCat('${id}')">確定刪除</button></div>`);
+}
+function confirmDelCat(id){
+  const to = $('d_to').value || null;
+  db.records.forEach(r => { if(r.catId === id) r.catId = to; });
+  db.recurring.forEach(r => { if(r.catId === id) r.catId = to; });
+  delete db.budgets.cats[id];
+  db.categories = db.categories.filter(c => c.id !== id);
+  save(); closeModal(); render(); toast('已刪除分類');
+}
+function restoreCats(){
+  const missing = DEFAULT_CATS.filter(d => !db.categories.some(c => c.id === d.id));
+  if(!missing.length){ toast('預設分類都還在'); return; }
+  if(!confirm(`要加回 ${missing.length} 個預設分類嗎？現有資料不會變動。`)) return;
+  db.categories.push(...structuredClone(missing)); save(); render();
+}
+
+/* ---------- 定期收支設定 ---------- */
+function recDesc(r){
+  const f = r.freq === 'daily' ? '每天' : r.freq === 'weekly' ? `每週${WEEK[r.day]}` : `每月 ${r.day} 號`;
+  return `${r.type==='expense'?'支出':'收入'} · ${f} · 自 ${r.start} 起`;
+}
+let rm = null;
+function recModal(id){
+  const r = id ? db.recurring.find(x => x.id === id) : null;
+  rm = r ? {...r} : {id:null, type:'expense', amount:'', catId:null, note:'', freq:'monthly', day:1, start:ymd(new Date())};
+  if(!r) rm.catId = (db.categories.find(c => c.type === 'expense' && !c.hidden) || {}).id || null;
+  drawRec();
+}
+function drawRec(){
+  const cats = db.categories.filter(c => c.type === rm.type);
+  openModal(`<h2 style="margin-top:0">${rm.id?'編輯':'新增'}定期收支</h2>
+    <div class="seg"><button class="${rm.type==='expense'?'on':''}" onclick="recType('expense')">支出</button>
+      <button class="${rm.type==='income'?'on':''}" onclick="recType('income')">收入</button></div>
+    <div class="field"><label>金額</label><input id="r_amt" type="number" inputmode="decimal" min="0" value="${rm.amount}"></div>
+    <div class="field"><label>分類</label><select id="r_cat">
+      ${cats.map(c => `<option value="${c.id}" ${c.id===rm.catId?'selected':''}>${esc(c.icon)} ${esc(c.name)}</option>`).join('')}
+      <option value="" ${rm.catId===null?'selected':''}>❓ 未分類</option></select></div>
+    <div class="field"><label>備註</label><input id="r_note" value="${esc(rm.note)}" placeholder="例如：房租"></div>
+    <div class="field"><label>頻率</label><select id="r_freq" onchange="recFreq(this.value)">
+      <option value="monthly" ${rm.freq==='monthly'?'selected':''}>每月</option>
+      <option value="weekly" ${rm.freq==='weekly'?'selected':''}>每週</option>
+      <option value="daily" ${rm.freq==='daily'?'selected':''}>每天</option></select></div>
+    ${rm.freq==='monthly' ? `<div class="field"><label>每月幾號（沒有該日的月份會記在月底）</label>
+        <input id="r_day" type="number" min="1" max="31" value="${rm.day}"></div>` : ''}
+    ${rm.freq==='weekly' ? `<div class="field"><label>星期幾</label><select id="r_day">
+        ${WEEK.map((w,i) => `<option value="${i}" ${i===rm.day?'selected':''}>星期${w}</option>`).join('')}</select></div>` : ''}
+    <div class="field"><label>開始日期</label><input id="r_start" type="date" value="${rm.start}"></div>
+    <div class="row">${rm.id ? `<button class="btn dng" onclick="delRec('${rm.id}')">刪除</button>` : ''}
+      <span class="sp"></span><button class="btn" onclick="closeModal()">取消</button>
+      <button class="btn pri" onclick="saveRec()">儲存</button></div>`);
+}
+function syncRec(){
+  rm.amount = $('r_amt').value; rm.note = $('r_note').value; rm.start = $('r_start').value || rm.start;
+  rm.catId = $('r_cat').value || null;
+  if($('r_day')) rm.day = parseInt($('r_day').value) || 0;
+}
+function recType(t){
+  syncRec(); rm.type = t;
+  rm.catId = (db.categories.find(c => c.type === t && !c.hidden) || {}).id || null; drawRec();
+}
+function recFreq(f){ syncRec(); rm.freq = f; rm.day = f === 'weekly' ? 1 : 1; drawRec(); }
+function saveRec(){
+  syncRec();
+  const amount = parseFloat(rm.amount);
+  if(!(amount > 0)){ toast('請輸入金額'); return; }
+  if(rm.freq === 'monthly' && !(rm.day >= 1 && rm.day <= 31)){ toast('日期請填 1–31'); return; }
+  const rule = {id:rm.id || uid(), type:rm.type, amount, catId:rm.catId, note:rm.note, freq:rm.freq,
+                day:rm.freq === 'daily' ? 0 : rm.day, start:rm.start, last:null};
+  if(rm.id){
+    const old = db.recurring.find(x => x.id === rm.id);
+    rule.last = (old.start === rule.start) ? old.last : null;
+    db.recurring[db.recurring.indexOf(old)] = rule;
+  } else db.recurring.push(rule);
+  save(); closeModal(); runRecurring(); render();
+}
+function delRec(id){
+  if(!confirm('刪除這個定期項目？已產生的記錄會保留。')) return;
+  db.recurring = db.recurring.filter(r => r.id !== id); save(); closeModal(); render();
+}
+
+/* ---------- 匯出匯入 ---------- */
+function download(name, text, type){
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(new Blob([text], {type}));
+  a.download = name; document.body.appendChild(a); a.click(); a.remove();
+  setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+}
+function exportJson(){ download(`記帳備份-${ymd(new Date())}.json`, JSON.stringify(db, null, 1), 'application/json'); }
+function exportCsv(){
+  const q = s => '"' + String(s ?? '').replace(/"/g,'""') + '"';
+  const rows = [['日期','類型','分類','金額','備註'].map(q).join(',')]
+    .concat([...db.records].sort((a,b) => a.date.localeCompare(b.date))
+      .map(r => [r.date, r.type==='expense'?'支出':'收入', cat(r.catId).name, r.amount, r.note].map(q).join(',')));
+  download(`記帳明細-${ymd(new Date())}.csv`, '﻿' + rows.join('\r\n'), 'text/csv');
+}
+$('file').addEventListener('change', async e => {
+  const f = e.target.files[0]; e.target.value = '';
+  if(!f) return;
+  try{
+    const d = JSON.parse(await f.text());
+    if(!Array.isArray(d.categories) || !Array.isArray(d.records)) throw 0;
+    if(!confirm(`備份檔含 ${d.records.length} 筆記錄、${d.categories.length} 個分類。\n還原會取代目前所有資料，確定嗎？`)) return;
+    db = {categories:d.categories, records:d.records, budgets:d.budgets || {total:0,cats:{}}, recurring:d.recurring || []};
+    save(); st.draft = newDraft('expense'); render(); toast('已還原');
+  }catch(err){ toast('這不是有效的備份檔'); }
+});
+
+/* ---------- 啟動 ---------- */
+runRecurring();
+render();
+if('serviceWorker' in navigator) navigator.serviceWorker.register('sw.js').catch(() => {});
+</script>
+</body>
+</html>
