@@ -94,8 +94,8 @@ const DEFAULT_CATS = [
   ['i_other','其他收入','💰','#9aa0a6','income']
 ].map(([id,name,icon,color,type]) => ({id,name,icon,color,type,hidden:false}));
 const NONE = {id:null,name:'未分類',icon:'❓',color:'#9aa0a6'};
-const ACC_TYPES = [['cash','現金','💵'],['bank','銀行','🏦'],['card','信用卡','💳'],['wallet','電子支付','📱'],['other','其他','💼']];
-function accType(k){ return ACC_TYPES.find(x => x[0] === k) || ACC_TYPES[4]; }
+const ACC_TYPES = [['cash','現金','💵'],['bank','銀行','🏦'],['card','信用卡','💳'],['wallet','電子支付','📱'],['easycard','悠遊卡','🚇'],['other','其他','💼']];
+function accType(k){ return ACC_TYPES.find(x => x[0] === k) || ACC_TYPES[ACC_TYPES.length - 1]; }
 function defaultAccount(){ return {id:'a_cash', name:'現金', icon:'💵', type:'cash', initial:0}; }
 
 let db = load();
