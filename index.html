@@ -156,7 +156,38 @@ function newDraft(type){
   return {type, amount:'', catId:first ? first.id : null, date:ymd(new Date()), note:'', editId:null};
 }
 const TABS = [['add','✏️','記帳'],['list','📋','明細'],['stats','📊','統計'],['set','⚙️','設定']];
+/* 登入關卡：同步狀態由 Firebase 模組更新；還沒登入或還沒載入完帳本時，只顯示這個畫面 */
+window.syncState = {status:'init', email:'', msg:'', ready:false};
+let gateFailed = false;
+function gateView(){
+  const s = window.syncState;
+  if(!window.Sync){
+    return gateBox(gateFailed
+      ? `<p class="sub">無法載入登入功能，請確認網路後重試。</p><button class="btn pri" onclick="location.reload()">重新載入</button>`
+      : `<p class="sub">載入中…</p>`);
+  }
+  if(s.status === 'init') return gateBox(`<p class="sub">載入中…</p>`);
+  if(s.status === 'off') return gateBox(`
+    <p class="sub">請先登入 Google 帳號。你的記錄會存在自己的帳號底下，換手機或電腦登入同一個帳號就能同步。</p>
+    <button class="btn pri" style="width:100%" onclick="Sync.login()">使用 Google 登入</button>`);
+  if(!s.ready){
+    return gateBox(s.status === 'error'
+      ? `<p class="sub">同步發生問題：${esc(s.msg)}</p>
+         <div class="row"><button class="btn sp" onclick="location.reload()">重試</button><button class="btn sp" onclick="Sync.logout()">登出</button></div>`
+      : `<p class="sub">正在載入你的帳本…</p><button class="btn sm" onclick="Sync.logout()">登出</button>`);
+  }
+  return null;
+}
+function gateBox(inner){
+  return `<div style="text-align:center;padding:18vh 8px 0"><div style="font-size:3rem">💰</div>
+    <h1 style="margin:8px 0 12px">輕鬆記帳</h1>${inner}</div>`;
+}
+setTimeout(() => { if(!window.Sync){ gateFailed = true; render(); } }, 10000);
+
 function render(){
+  const g = gateView();
+  $('nav').parentElement.style.display = g ? 'none' : '';
+  if(g){ $('app').innerHTML = g; return; }
   $('nav').innerHTML = TABS.map(([k,i,n]) =>
     `<button class="${st.tab===k?'on':''}" onclick="go('${k}')"><b>${i}</b>${n}</button>`).join('');
   $('app').innerHTML = {add:vAdd, list:vList, stats:vStats, set:vSet}[st.tab]();
@@ -434,19 +465,11 @@ function vSet(){
   </div>`;
 }
 function syncCard(){
-  const s = window.syncState || {status:'off'};
-  let body;
-  if(!window.Sync){
-    body = `<div class="sub">目前無法使用雲端同步（可能沒有網路）。記錄仍會存在這支手機。</div>`;
-  } else if(s.status === 'off'){
-    body = `<div class="sub" style="margin-bottom:10px">登入後，不同設備登入同一個 Google 帳號就會同步記錄。不登入也可以照常使用。</div>
-      <button class="btn pri" style="width:100%" onclick="Sync.login()">使用 Google 登入同步</button>`;
-  } else {
-    const label = s.status === 'loading' ? '同步中…' : s.status === 'error' ? '同步發生問題：' + esc(s.msg || '') : '✅ 已同步';
-    body = `<div class="row"><div class="sp"><div>${label}</div><div class="sub">${esc(s.email)}</div></div>
-      <button class="btn sm" onclick="Sync.logout()">登出</button></div>`;
-  }
-  return `<h2>雲端同步</h2><div class="card">${body}</div>`;
+  const s = window.syncState;
+  const label = s.status === 'error' ? '同步發生問題：' + esc(s.msg || '') : '✅ 已同步';
+  return `<h2>帳號</h2><div class="card"><div class="row"><div class="sp"><div>${label}</div>
+    <div class="sub">${esc(s.email)}</div></div>
+    <button class="btn sm" onclick="Sync.logout()">登出</button></div></div>`;
 }
 function moveCat(id, dir){
   const same = db.categories.filter(c => c.type === st.catTab);
@@ -658,8 +681,7 @@ window.App = {
 };
 
 /* ---------- 啟動 ---------- */
-runRecurring();
-render();
+render();   // 定期收支要等登入、載入雲端帳本後才補記（見同步模組）
 if('serviceWorker' in navigator) navigator.serviceWorker.register('sw.js').catch(() => {});
 </script>
 <script type="module">
@@ -680,7 +702,7 @@ const app = initializeApp({
 const auth = getAuth(app);
 const fs = initializeFirestore(app, {localCache: persistentLocalCache()});
 
-const S = window.syncState = {status:'off', email:'', msg:''};
+const S = window.syncState;
 let uid = null, unsubs = [];
 let ready = false, gotRecs = false, gotSet = false;
 let recsData = [], setData = null, cloudRecs = new Map(), cloudSetJson = null, localBefore = null;
@@ -695,7 +717,7 @@ const stable = v => JSON.stringify(v, (k, x) =>
     ? Object.fromEntries(Object.entries(x).sort(([a], [b]) => a < b ? -1 : 1)) : x);
 const settingsOf = d => clean({categories:d.categories, budgets:d.budgets, recurring:d.recurring});
 
-function refresh(){ if(App.tab !== 'add') App.render(); }
+function refresh(){ if(!S.ready || App.tab !== 'add') App.render(); }   // 記帳頁輸入中不重畫，避免打字被打斷
 function fail(e){ S.status = 'error'; S.msg = e.code || e.message; refresh(); App.toast('同步失敗：' + S.msg); }
 
 function push(){
@@ -732,7 +754,7 @@ function onData(){
     App.db = {...clean(setData || settingsOf(App.db)), records:recsData};
   }
   App.save(true);
-  S.status = 'on'; S.msg = '';
+  S.status = 'on'; S.msg = ''; S.ready = true;
   if(first){ App.runRecurring(); push(); }
   refresh();
 }
@@ -759,6 +781,7 @@ function detach(){
 
 onAuthStateChanged(auth, user => {
   detach();
+  S.ready = false;
   if(!user){ uid = null; S.status = 'off'; S.email = ''; refresh(); return; }
   uid = user.uid; S.email = user.email || ''; S.status = 'loading';
   localBefore = clean(App.db);
