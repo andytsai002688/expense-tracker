@@ -1,4 +1,4 @@
-const CACHE = 'ledger-v3';
+const CACHE = 'ledger-v4';
 const FILES = ['./', 'index.html', 'manifest.json', 'icon.svg'];
 
 self.addEventListener('install', e => {
@@ -19,7 +19,8 @@ self.addEventListener('fetch', e => {
   if (e.request.method !== 'GET' ||
       !(url.origin === location.origin || url.href.startsWith('https://www.gstatic.com/firebasejs/'))) return;
   e.respondWith(
-    fetch(e.request).then(res => {
+    // 自己的檔案每次都向伺服器確認有沒有新版，不吃瀏覽器 10 分鐘的 HTTP 快取
+    fetch(e.request, url.origin === location.origin ? {cache:'no-cache'} : undefined).then(res => {
       const copy = res.clone();
       caches.open(CACHE).then(c => c.put(e.request, copy));
       return res;
