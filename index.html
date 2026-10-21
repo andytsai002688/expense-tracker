@@ -111,10 +111,11 @@ function ensureAccounts(){
 function defaultAcc(){ return db.accounts.find(a => a.type === 'cash') || db.accounts[0]; }
 function acc(id){ return db.accounts.find(a => a.id === id); }
 function accOf(r){ return acc(r.accId) || defaultAcc(); }
-function balances(){
+function balances(upTo){
   const b = new Map(db.accounts.map(a => [a.id, Number(a.initial) || 0]));
   const add = (id, v) => { if(b.has(id)) b.set(id, b.get(id) + v); };
   for(const r of db.records){
+    if(upTo && r.date > upTo) continue;
     if(r.type === 'transfer'){ add(accOf(r).id, -r.amount); const to = acc(r.toAccId); if(to) add(to.id, r.amount); }
     else add(accOf(r).id, r.type === 'income' ? r.amount : -r.amount);
   }
@@ -127,8 +128,58 @@ function totals(){
   for(const a of db.accounts){ const v = b.get(a.id); all += v; if(a.type === 'cash') cash += v; }
   return {b, all:Math.round(all * 100) / 100, cash:Math.round(cash * 100) / 100};
 }
+// 信用卡的顯示名稱：「銀行 卡名」
+function accLabel(a){
+  const bank = a.type === 'card' ? acc(a.parentId) : null;
+  return bank ? bank.name + ' ' + a.name : a.name;
+}
+// 帳戶分組：一般帳戶一組；信用卡依所屬銀行各一組；沒有所屬銀行的信用卡另成一組
+function accGroup(a){
+  if(a.type !== 'card') return 't';
+  const p = acc(a.parentId);
+  return 'c:' + (p && p.type !== 'card' ? p.id : '');
+}
 function accOptions(sel){
-  return db.accounts.map(a => `<option value="${a.id}" ${a.id === sel ? 'selected' : ''}>${esc(a.icon)} ${esc(a.name)}</option>`).join('');
+  const opt = a => `<option value="${a.id}" ${a.id === sel ? 'selected' : ''}>${esc(a.icon)} ${esc(a.type === 'card' ? accLabel(a) : a.name)}</option>`;
+  const cards = db.accounts.filter(a => a.type === 'card');
+  let h = '';
+  for(const a of db.accounts.filter(x => x.type !== 'card')){
+    const mine = cards.filter(c => accGroup(c) === 'c:' + a.id);
+    h += mine.length ? `<optgroup label="${esc(a.name)}">${opt(a)}${mine.map(opt).join('')}</optgroup>` : opt(a);
+  }
+  const orphans = cards.filter(c => accGroup(c) === 'c:');
+  if(orphans.length) h += `<optgroup label="信用卡">${orphans.map(opt).join('')}</optgroup>`;
+  return h;
+}
+// 信用卡額度：可用額度 = 額度 + 餘額（餘額為負數代表已刷未繳）
+function cardAvail(a, b){
+  const bal = (b || balances()).get(a.id) || 0, limit = Number(a.limit) || 0;
+  return {bal, owed:Math.max(0, Math.round(-bal * 100) / 100), limit, avail:limit ? Math.round((limit + bal) * 100) / 100 : null};
+}
+// 繳款日自動扣款：把「繳款日當天為止」已刷未繳的金額，從所屬銀行轉到信用卡，卡片已刷金額就歸零
+function runCardPayments(){
+  const today = new Date(); today.setHours(0,0,0,0);
+  let added = 0;
+  for(const c of db.accounts){
+    if(c.type !== 'card' || !c.payDay || !acc(c.parentId)) continue;
+    if(!c.lastRun){ c.lastRun = ymd(today); continue; }   // 剛設定：不補繳過去的日子
+    const cur = parse(c.lastRun);
+    cur.setDate(cur.getDate() + 1);
+    for(; cur <= today; cur.setDate(cur.getDate() + 1)){
+      const dim = new Date(cur.getFullYear(), cur.getMonth() + 1, 0).getDate();
+      if(cur.getDate() !== Math.min(c.payDay, dim)) continue;
+      const date = ymd(cur), id = `cp_${c.id}_${date}`;   // 固定 id：多台設備不會重複扣款
+      if(db.records.some(r => r.id === id)) continue;
+      const owed = Math.round(-(balances(date).get(c.id) || 0) * 100) / 100;
+      if(owed > 0){
+        db.records.push({id, type:'transfer', amount:owed, catId:null, date, note:'信用卡繳款', ruleId:'cardpay',
+                         accId:c.parentId, toAccId:c.id});
+        added++;
+      }
+    }
+    c.lastRun = ymd(today);
+  }
+  return added;
 }
 function rememberAcc(id){ try{ localStorage.setItem('ledger.acc', id); }catch(e){} }
 function savedRange(){
@@ -184,7 +235,8 @@ function runRecurring(){
     }
     r.last = ymd(today);
   }
-  if(added){ save(); toast(`已自動加入 ${added} 筆定期收支`); }
+  added += runCardPayments();
+  if(added){ save(); toast(`已自動加入 ${added} 筆定期收支或信用卡繳款`); }
 }
 
 /* ---------- 畫面骨架 ---------- */
@@ -266,6 +318,7 @@ function vAdd(){
     <button class="${d.type==='income'?'on':''}" onclick="setType('income')">收入</button>
     <button class="${isT?'on':''}" onclick="setType('transfer')">轉帳</button>
   </div>
+  ${cardBanner()}
   ${budgetBanner()}
   <div class="amount ${d.type==='expense'?'exp':d.type==='income'?'inc':''}" id="amt">${amtText()}</div>
   ${isT ? `<div class="card">
@@ -276,7 +329,7 @@ function vAdd(){
     <button class="cat ${d.catId===null?'on':''}" onclick="pickCat(null)"><i>❓</i>未分類</button>
   </div>
   <div class="row field"><span class="sub" style="width:48px">帳戶</span>
-    <select onchange="st.draft.accId=this.value;rememberAcc(this.value)">${accOptions(d.accId)}</select></div>`}
+    <select onchange="st.draft.accId=this.value;rememberAcc(this.value);render()">${accOptions(d.accId)}</select></div>`}
   <div class="row field">
     <input type="date" value="${d.date}" onchange="st.draft.date=this.value||st.draft.date;render()" style="flex:1">
     <input type="text" placeholder="備註" value="${esc(d.note)}" oninput="st.draft.note=this.value" style="flex:2">
@@ -314,7 +367,7 @@ function key(k){
     if(a.replace('.','').length >= 10) return;
     a += k;
   }
-  st.draft.amount = a; $('amt').textContent = amtText();
+  st.draft.amount = a; $('amt').textContent = amtText(); updateCardAfter();
 }
 function saveRecord(){
   const d = st.draft, amount = parseFloat(d.amount);
@@ -377,11 +430,11 @@ function recItem(r){
   const isT = r.type === 'transfer';
   const c = isT ? {icon:'🔁', name:'轉帳', color:'#9aa0a6'} : cat(r.catId);
   const a = accOf(r), to = isT ? acc(r.toAccId) : null;
-  const where = isT ? `${a.name} → ${to ? to.name : '?'}` : (db.accounts.length > 1 ? a.name : '');
+  const where = isT ? `${accLabel(a)} → ${to ? accLabel(to) : '?'}` : (db.accounts.length > 1 ? accLabel(a) : '');
   const note = [where, r.note].filter(Boolean).join(' · ');
   return `<div class="item" onclick="editRecord('${r.id}')">
     <div class="ico" style="background:${c.color}33">${esc(c.icon)}</div>
-    <div class="sp"><div>${esc(c.name)}${r.ruleId?'<span class="tag">定期</span>':''}</div>
+    <div class="sp"><div>${esc(c.name)}${r.ruleId?`<span class="tag">${r.ruleId==='cardpay'?'自動繳款':'定期'}</span>`:''}</div>
       ${note?`<div class="sub">${esc(note)}</div>`:''}</div>
     <b class="${isT?'':r.type==='expense'?'exp':'inc'}">${isT?'':r.type==='expense'?'-':'+'}${money(r.amount)}</b>
   </div>`;
@@ -519,6 +572,31 @@ function budgetBar(label, used, limit){
     <div class="bar"><span style="width:${Math.min(100, p * 100)}%;background:${color}"></span></div>
     <div class="sub" style="color:${p >= 1 ? 'var(--danger)' : 'var(--sub)'}">${left >= 0 ? '剩餘 ' + money(left) : '超出 ' + money(-left)}</div></div>`;
 }
+// 記帳頁上方：選到信用卡時，顯示可用額度、已刷金額與繳款日
+function cardBanner(){
+  const d = st.draft, a = acc(d.accId);
+  if(d.type === 'transfer' || !a || a.type !== 'card') return '';
+  const c = cardAvail(a), bank = acc(a.parentId);
+  const pct = c.limit ? Math.min(100, c.owed / c.limit * 100) : 0;
+  const color = pct >= 100 ? 'var(--danger)' : pct >= 80 ? 'var(--warn)' : 'var(--accent)';
+  const pay = a.payDay
+    ? (bank ? `每月 ${a.payDay} 號從「${esc(bank.name)}」自動扣款` : `每月 ${a.payDay} 號繳款（尚未指定所屬銀行，不會自動扣款）`)
+    : '尚未設定繳款日';
+  return `<div class="card" style="padding:12px 14px">
+    <div class="row"><b class="sp">${esc(a.icon)} ${esc(accLabel(a))}</b>${c.limit ? `<span class="sub">額度 ${money(c.limit)}</span>` : ''}</div>
+    ${c.limit ? `<div style="font-size:1.4rem;font-weight:700;margin-top:6px;${c.avail < 0 ? 'color:var(--danger)' : ''}">可用額度 ${money(c.avail)}</div>
+      <div class="bar"><span style="width:${pct}%;background:${color}"></span></div>` : '<div class="sub" style="margin-top:6px">尚未設定額度</div>'}
+    <div class="sub" style="margin-top:6px">已刷未繳 ${money(c.owed)}</div>
+    <div class="sub" id="cardAfter">${cardAfterText()}</div>
+    <div class="sub">${pay}</div></div>`;
+}
+function cardAfterText(){
+  const d = st.draft, a = acc(d.accId), amt = parseFloat(d.amount);
+  if(d.editId || !a || a.type !== 'card' || !a.limit || !(amt > 0)) return '';
+  const after = Math.round((cardAvail(a).avail + (d.type === 'income' ? amt : -amt)) * 100) / 100;
+  return `記入這筆後，可用額度 ${money(after)}`;
+}
+function updateCardAfter(){ const el = $('cardAfter'); if(el) el.textContent = cardAfterText(); }
 // 記帳頁上方：依記帳日期所在的月份，顯示總預算，以及目前選的分類預算
 function budgetBanner(){
   const d = st.draft;
@@ -556,18 +634,13 @@ function vAcc(){
       <div><span class="sub">帳戶總額</span><b style="font-size:1.4rem">${money(t.all)}</b></div>
       <div><span class="sub">現金總額</span><b style="font-size:1.4rem">${money(t.cash)}</b></div></div>
     <h2>我的帳戶</h2>
-    <div class="card" style="padding:4px 14px">${db.accounts.map((a, i) => { const v = t.b.get(a.id); return `
-      <div class="item" onclick="accModal('${a.id}')"><div class="ico" style="background:var(--chip)">${esc(a.icon)}</div>
-        <div class="sp"><div>${esc(a.name)}<span class="tag">${accType(a.type)[1]}</span></div></div>
-        <b class="${v<0?'exp':''}">${money(v)}</b>
-        <button class="btn sm" ${i===0?'disabled':''} onclick="event.stopPropagation();moveAcc('${a.id}',-1)" aria-label="上移">▲</button>
-        <button class="btn sm" ${i===db.accounts.length-1?'disabled':''} onclick="event.stopPropagation();moveAcc('${a.id}',1)" aria-label="下移">▼</button></div>`; }).join('')}</div>
+    <div class="card" style="padding:4px 14px">${accRows().map(r => accRow(r.a, r.depth, t)).join('')}</div>
     <button class="btn pri" style="width:100%" onclick="accModal()">＋ 新增帳戶</button>
     <h2>每月預算</h2>
     ${budgetCardSummary()}
     ${recSection('expense')}
     ${recSection('income')}
-    <p class="sub">帳戶總額是所有帳戶餘額相加，現金總額只算類型為「現金」的帳戶。信用卡刷卡會讓餘額變成負數，代表欠款。在「記帳」頁選「轉帳」，可以記錄提款、還款等帳戶之間的轉移。</p>`;
+    <p class="sub">帳戶總額是所有帳戶餘額相加，現金總額只算類型為「現金」的帳戶。信用卡歸在所屬銀行底下，刷卡會讓卡片餘額變成負數，代表已刷未繳；設定繳款日後，每月那一天會自動從所屬銀行扣掉已刷金額，卡片的已刷金額就歸零（若當天沒有開啟 App，下次開啟時會補上，日期仍是繳款日）。在「記帳」頁選「轉帳」，可以記錄提款、還款等帳戶之間的轉移。</p>`;
 }
 function budgetCardSummary(){
   const rows = db.categories.filter(c => c.type === 'expense' && db.budgets.cats[c.id])
@@ -596,50 +669,115 @@ function recSection(type){
         <b class="${type === 'expense' ? 'exp' : 'inc'}">${money(r.amount)}</b></div>`; }).join('')
       || `<div class="empty">還沒有${name}</div>`}</div>`;
 }
+// 顯示順序：一般帳戶依序排列，各自的信用卡縮排在它底下；沒有所屬銀行的信用卡放最後
+function accRows(){
+  const cards = db.accounts.filter(a => a.type === 'card'), rows = [];
+  for(const a of db.accounts.filter(x => x.type !== 'card')){
+    rows.push({a, depth:0});
+    cards.filter(c => accGroup(c) === 'c:' + a.id).forEach(c => rows.push({a:c, depth:1}));
+  }
+  cards.filter(c => accGroup(c) === 'c:').forEach(c => rows.push({a:c, depth:0}));
+  return rows;
+}
+function accRow(a, depth, t){
+  const sibs = db.accounts.filter(x => accGroup(x) === accGroup(a)), si = sibs.indexOf(a);
+  const v = t.b.get(a.id);
+  let sub = '', amount = `<b class="${v<0?'exp':''}">${money(v)}</b>`;
+  if(a.type === 'card'){
+    const c = cardAvail(a, t.b);
+    sub = [c.limit ? `額度 ${money(c.limit)}・可用 ${money(c.avail)}` : '未設額度', a.payDay ? `每月 ${a.payDay} 號繳款` : ''].filter(Boolean).join('・');
+    amount = c.owed > 0 ? `<b class="exp">已刷 ${money(c.owed)}</b>` : `<b>${money(v)}</b>`;
+  }
+  return `<div class="item" style="${depth ? 'padding-left:22px' : ''}" onclick="accModal('${a.id}')">
+    <div class="ico" style="background:var(--chip)">${esc(a.icon)}</div>
+    <div class="sp"><div>${esc(a.name)}<span class="tag">${accType(a.type)[1]}</span></div>${sub ? `<div class="sub">${sub}</div>` : ''}</div>
+    ${amount}
+    <button class="btn sm" ${si===0?'disabled':''} onclick="event.stopPropagation();moveAcc('${a.id}',-1)" aria-label="上移">▲</button>
+    <button class="btn sm" ${si===sibs.length-1?'disabled':''} onclick="event.stopPropagation();moveAcc('${a.id}',1)" aria-label="下移">▼</button></div>`;
+}
 function moveAcc(id, dir){
-  const i = db.accounts.findIndex(a => a.id === id), j = i + dir;
-  if(i < 0 || j < 0 || j >= db.accounts.length) return;
+  const a = acc(id);
+  if(!a) return;
+  const sibs = db.accounts.filter(x => accGroup(x) === accGroup(a));   // 只和同一組（同一個銀行底下的卡、或一般帳戶）互換
+  const j = sibs.indexOf(a) + dir;
+  if(j < 0 || j >= sibs.length) return;
   // 沒有帳戶欄位的舊記錄與定期項目，預設算在「第一個現金帳戶」；調整順序前先把歸屬固定下來，才不會因為順序改變而換帳戶
   const def = defaultAcc().id;
   db.records.forEach(r => { if(!r.accId) r.accId = def; });
   db.recurring.forEach(r => { if(!r.accId) r.accId = def; });
-  [db.accounts[i], db.accounts[j]] = [db.accounts[j], db.accounts[i]];
+  const x = db.accounts.indexOf(a), y = db.accounts.indexOf(sibs[j]);
+  [db.accounts[x], db.accounts[y]] = [db.accounts[y], db.accounts[x]];
   save(); render();
 }
 let am = null;
 function accModal(id){
   const a = id ? acc(id) : null;
-  am = {id, type:a ? a.type : 'bank'};
-  openModal(`<h2 style="margin-top:0">${a ? '編輯帳戶' : '新增帳戶'}</h2>
-    <div class="field"><label>名稱</label><input id="a_name" maxlength="30" value="${esc(a ? a.name : '')}" placeholder="例如：中國信託"></div>
+  am = a
+    ? {id, type:a.type, name:a.name, icon:a.icon, parentId:a.parentId || '', limit:a.limit || '', payDay:a.payDay || '',
+       initial:a.type === 'card' ? String(a.initial ? -a.initial : 0) : String(a.initial)}
+    : {id:null, type:'bank', name:'', icon:accType('bank')[2], parentId:'', limit:'', payDay:'', initial:'0'};
+  drawAcc();
+}
+function drawAcc(){
+  const isCard = am.type === 'card', banks = db.accounts.filter(x => x.type === 'bank' && x.id !== am.id);
+  openModal(`<h2 style="margin-top:0">${am.id ? '編輯帳戶' : '新增帳戶'}</h2>
+    <div class="field"><label>名稱</label><input id="a_name" maxlength="30" value="${esc(am.name)}" placeholder="例如：中國信託"></div>
     <div class="field"><label>類型</label><select id="a_type" onchange="accTypeChanged(this.value)">
       ${ACC_TYPES.map(([k,n,i]) => `<option value="${k}" ${k === am.type ? 'selected' : ''}>${i} ${n}</option>`).join('')}</select></div>
-    <div class="field"><label>圖示（emoji）</label><input id="a_icon" maxlength="4" value="${esc(a ? a.icon : accType(am.type)[2])}"></div>
-    <div class="field"><label>起始餘額（建立帳戶時已有的金額，可為負數）</label>
-      <input id="a_init" type="number" inputmode="decimal" step="any" value="${a ? a.initial : 0}"></div>
-    <div class="row">${a && db.accounts.length > 1 ? `<button class="btn dng" onclick="delAcc('${a.id}')">刪除</button>` : ''}
+    ${isCard ? `<div class="field"><label>所屬銀行（繳款時從這個銀行帳戶扣款）</label><select id="a_parent">
+        <option value="">未指定</option>${banks.map(b => `<option value="${b.id}" ${b.id === am.parentId ? 'selected' : ''}>${esc(b.icon)} ${esc(b.name)}</option>`).join('')}</select>
+        ${banks.length ? '' : '<div class="sub" style="margin-top:4px">還沒有「銀行」類型的帳戶，請先新增銀行帳戶。</div>'}</div>
+      <div class="field"><label>信用額度</label><input id="a_limit" type="number" inputmode="decimal" min="0" step="any" value="${esc(am.limit)}"></div>
+      <div class="field"><label>每月繳款日（1–31，留空表示不自動扣款）</label><input id="a_pay" type="number" inputmode="numeric" min="1" max="31" value="${esc(am.payDay)}"></div>` : ''}
+    <div class="field"><label>圖示（emoji）</label><input id="a_icon" maxlength="4" value="${esc(am.icon)}"></div>
+    <div class="field"><label>${isCard ? '目前已刷、還沒繳的金額（填正數，沒有就填 0）' : '起始餘額（建立帳戶時已有的金額，可為負數）'}</label>
+      <input id="a_init" type="number" inputmode="decimal" step="any" value="${esc(am.initial)}"></div>
+    <div class="row">${am.id && db.accounts.length > 1 ? `<button class="btn dng" onclick="delAcc('${am.id}')">刪除</button>` : ''}
       <span class="sp"></span><button class="btn" onclick="closeModal()">取消</button>
       <button class="btn pri" onclick="saveAcc()">儲存</button></div>`);
 }
+function syncAcc(){
+  am.name = $('a_name').value; am.icon = $('a_icon').value; am.initial = $('a_init').value;
+  if($('a_parent')) am.parentId = $('a_parent').value;
+  if($('a_limit')) am.limit = $('a_limit').value;
+  if($('a_pay')) am.payDay = $('a_pay').value;
+}
 function accTypeChanged(k){
-  const i = $('a_icon');
-  if(i.value === accType(am.type)[2]) i.value = accType(k)[2];
+  syncAcc();
+  if(am.icon === accType(am.type)[2]) am.icon = accType(k)[2];
   am.type = k;
+  drawAcc();
 }
 function saveAcc(){
-  const name = $('a_name').value.trim();
+  syncAcc();
+  const name = am.name.trim();
   if(!name){ toast('請輸入名稱'); return; }
-  const type = $('a_type').value;
-  const f = {name, type, icon:$('a_icon').value.trim() || accType(type)[2], initial:parseFloat($('a_init').value) || 0};
-  if(am.id) Object.assign(acc(am.id), f); else db.accounts.push({id:'a_' + uid(), ...f});
+  const type = am.type, isCard = type === 'card', init = parseFloat(am.initial) || 0;
+  const f = {name, type, icon:am.icon.trim() || accType(type)[2], initial:isCard ? (init ? -init : 0) : init};
+  const old = am.id ? acc(am.id) : null;
+  if(isCard){
+    const pd = parseInt(am.payDay);
+    if(am.payDay !== '' && !(pd >= 1 && pd <= 31)){ toast('繳款日請填 1–31'); return; }
+    f.parentId = am.parentId || null;
+    f.limit = Math.max(0, parseFloat(am.limit) || 0);
+    f.payDay = pd >= 1 ? pd : 0;
+    // lastRun：自動扣款已處理到哪一天。剛設定繳款日時從今天算起，不會去補繳過去的日子
+    f.lastRun = old && old.lastRun && old.payDay ? old.lastRun : (f.payDay ? ymd(new Date()) : null);
+  }
+  if(old){
+    if(!isCard){ delete old.parentId; delete old.limit; delete old.payDay; delete old.lastRun; }
+    Object.assign(old, f);
+  } else db.accounts.push({id:'a_' + uid(), ...f});
   save(); closeModal(); render();
 }
 function delAcc(id){
   const a = acc(id), others = db.accounts.filter(x => x.id !== id);
   const n = db.records.filter(r => accOf(r).id === id || r.toAccId === id).length;
+  const nc = db.accounts.filter(c => c.parentId === id).length;
   openModal(`<h2 style="margin-top:0">刪除「${esc(a.name)}」</h2>
     <p class="sub">此帳戶有 ${n} 筆記錄。請選擇要移到哪個帳戶；此帳戶的起始餘額 ${money(a.initial)} 也會加到該帳戶，帳戶總額不會改變。</p>
-    <div class="field"><select id="d_acc">${others.map(o => `<option value="${o.id}">${esc(o.icon)} ${esc(o.name)}</option>`).join('')}</select></div>
+    ${nc ? `<p class="sub">底下的 ${nc} 張信用卡會變成「未指定銀行」，自動扣款會停用，請之後重新設定所屬銀行。</p>` : ''}
+    <div class="field"><select id="d_acc">${others.map(o => `<option value="${o.id}">${esc(o.icon)} ${esc(accLabel(o))}</option>`).join('')}</select></div>
     <div class="row"><button class="btn sp" onclick="closeModal()">取消</button>
       <button class="btn dng sp" onclick="confirmDelAcc('${id}')">確定刪除</button></div>`);
 }
@@ -650,6 +788,7 @@ function confirmDelAcc(id){
     if(r.toAccId === id) r.toAccId = to.id;
   });
   db.recurring.forEach(r => { if(r.accId === id) r.accId = to.id; });
+  db.accounts.forEach(c => { if(c.parentId === id) c.parentId = null; });
   to.initial = Math.round(((Number(to.initial) || 0) + (Number(a.initial) || 0)) * 100) / 100;
   db.accounts = db.accounts.filter(x => x.id !== id);
   save(); closeModal(); render(); toast('已刪除帳戶');
@@ -883,7 +1022,7 @@ function exportXlsx(){
     .concat(recs.map((r,i) => {
       const n = i + 2, isT = r.type === 'transfer', to = isT ? acc(r.toAccId) : null;
       return `<row r="${n}">` + str('A'+n, r.date) + str('B'+n, typeName[r.type] || r.type) + str('C'+n, isT ? '' : cat(r.catId).name)
-        + str('D'+n, isT ? `${accOf(r).name} → ${to ? to.name : ''}` : accOf(r).name)
+        + str('D'+n, isT ? `${accLabel(accOf(r))} → ${to ? accLabel(to) : ''}` : accLabel(accOf(r)))
         + `<c r="E${n}"><v>${r.amount}</v></c>` + str('F'+n, r.note) + '</row>';
     }));
   const NS = 'http://schemas.openxmlformats.org/spreadsheetml/2006/main';
