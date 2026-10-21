@@ -695,7 +695,7 @@ function catModal(id){
   const c = id ? cat(id) : null;
   cm = {id, type:c ? c.type : st.catTab, icon:c ? c.icon : EMOJIS[0], color:c ? c.color : COLORS[0]};
   openModal(`<h2 style="margin-top:0">${c?'編輯分類':'新增'+(cm.type==='expense'?'支出':'收入')+'分類'}</h2>
-    <div class="field"><label>名稱</label><input id="c_name" maxlength="12" value="${esc(c?c.name:'')}"></div>
+    <div class="field"><label>名稱</label><input id="c_name" maxlength="30" value="${esc(c?c.name:'')}"></div>
     <div class="field"><label>圖示（點選或自行輸入 emoji）</label>
       <input id="c_icon" maxlength="4" value="${esc(cm.icon)}" oninput="cm.icon=this.value;markEmoji()" style="margin-bottom:8px">
       <div class="emojis" id="c_emojis">${EMOJIS.map(e => `<button onclick="cm.icon='${e}';$('c_icon').value='${e}';markEmoji()">${e}</button>`).join('')}</div></div>
