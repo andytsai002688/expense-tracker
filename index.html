@@ -96,10 +96,14 @@ const DEFAULT_CATS = [
 const NONE = {id:null,name:'未分類',icon:'❓',color:'#9aa0a6'};
 
 let db = load();
-let st = {tab:'add', month:ym(new Date()), statType:'expense', catTab:'expense',
+let st = {tab:'add', month:ym(new Date()), statType:'expense', catTab:'expense', range:savedRange(),
           draft:newDraft('expense')};
 
 /* ---------- 資料 ---------- */
+function savedRange(){
+  try{ const n = parseInt(localStorage.getItem('ledger.range')); if(n >= 1 && n <= 36) return n; }catch(e){}
+  return 6;
+}
 function load(){
   try{
     const d = JSON.parse(localStorage.getItem(KEY));
@@ -370,32 +374,66 @@ function vStats(){
         <div class="bar"><span style="width:${r.v/s.total*100}%;background:${r.c.color}"></span></div></div>`).join('')
       : '<div class="empty">沒有資料</div>'}
   </div>
-  <h2>近 6 個月</h2>
-  <div class="card">${bars()}</div>`;
+  ${rangeSection()}`;
 }
-function donut(rows, total){
-  const R = 40, C = 2*Math.PI*R;
+function donut(rows, total, solid){
+  // solid：實心圓餅（粗線畫滿半徑）；否則是環狀圖
+  const R = solid ? 25 : 40, W = solid ? 50 : 16, size = solid ? 150 : 120, C = 2*Math.PI*R;
   let off = 0;
   const segs = total ? rows.map(r => {
     const len = r.v/total*C;
-    const el = `<circle cx="50" cy="50" r="${R}" fill="none" stroke="${r.c.color}" stroke-width="16"
+    const el = `<circle cx="50" cy="50" r="${R}" fill="none" stroke="${r.c.color}" stroke-width="${W}"
       stroke-dasharray="${len} ${C-len}" stroke-dashoffset="${-off}" transform="rotate(-90 50 50)"/>`;
     off += len; return el;
   }).join('') : '';
-  return `<svg viewBox="0 0 100 100" width="120" height="120" role="img" aria-label="分類占比圖">
-    <circle cx="50" cy="50" r="${R}" fill="none" stroke="var(--chip)" stroke-width="16"/>${segs}</svg>`;
+  return `<svg viewBox="0 0 100 100" width="${size}" height="${size}" role="img" aria-label="分類占比圖">
+    <circle cx="50" cy="50" r="${R}" fill="none" stroke="var(--chip)" stroke-width="${W}"/>${segs}</svg>`;
 }
-function bars(){
-  const ms = Array.from({length:6}, (_,i) => shiftMonth(ym(new Date()), i-5));
+function rangeSection(){
+  const n = st.range;
+  const ms = Array.from({length:n}, (_,i) => shiftMonth(st.month, i - n + 1));
+  const set = new Set(ms), by = {};
+  let total = 0;
+  for(const r of db.records) if(r.type === st.statType && set.has(r.date.slice(0,7))){
+    total += r.amount; by[r.catId] = (by[r.catId] || 0) + r.amount;
+  }
+  const rows = Object.entries(by).map(([id,v]) => ({c:cat(id==='null'?null:id), v})).sort((a,b) => b.v - a.v);
+  const label = st.statType === 'expense' ? '支出' : '收入';
+  return `<div class="row" style="margin:18px 0 8px"><h2 class="sp" style="margin:0">收支趨勢</h2>
+      <span class="sub">截至本月，往前</span>
+      <select style="width:auto" onchange="setRange(this.value)" aria-label="顯示月數">
+        ${Array.from({length:36}, (_,i) => i + 1).map(k => `<option value="${k}" ${k===n?'selected':''}>${k} 個月</option>`).join('')}
+      </select></div>
+    <div class="card">${bars(ms)}</div>
+    <h2>${n} 個月的${label}分類占比</h2>
+    <div class="card">
+      <div class="row" style="justify-content:center">${donut(rows, total, true)}</div>
+      <div class="sub" style="text-align:center;margin:6px 0">合計 ${money(total)}</div>
+      ${rows.length ? rows.map(r => `
+        <div class="row" style="margin-top:8px"><span class="ico" style="width:14px;height:14px;background:${r.c.color}"></span>
+          <span>${esc(r.c.icon)} ${esc(r.c.name)}</span><span class="sp"></span>
+          <span class="sub">${Math.round(r.v/total*100)}%</span><b>${money(r.v)}</b></div>`).join('')
+        : '<div class="empty">沒有資料</div>'}
+    </div>`;
+}
+function setRange(v){
+  st.range = Math.min(36, Math.max(1, parseInt(v) || 6));
+  try{ localStorage.setItem('ledger.range', st.range); }catch(e){}
+  render();
+}
+function bars(ms){
   const data = ms.map(m => ({m, i:sumBy(m,'income').total, e:sumBy(m,'expense').total}));
   const max = Math.max(1, ...data.flatMap(d => [d.i, d.e]));
-  const H = 110;
-  return `<svg viewBox="0 0 300 ${H+34}" width="100%" role="img" aria-label="近六個月收支長條圖">
+  const H = 110, W = 300, slot = W / ms.length, bw = Math.min(17, slot * 0.38);
+  const step = ms.length <= 12 ? 1 : ms.length <= 24 ? 2 : 3;
+  const fs = ms.length <= 6 ? 11 : 9;
+  return `<svg viewBox="0 0 ${W} ${H+34}" width="100%" role="img" aria-label="各月收支長條圖">
     ${data.map((d,k) => {
-      const x = k*50 + 6, hi = d.i/max*H, he = d.e/max*H;
-      return `<rect x="${x}" y="${H-hi}" width="17" height="${hi}" rx="3" fill="var(--income)"/>
-        <rect x="${x+19}" y="${H-he}" width="17" height="${he}" rx="3" fill="var(--expense)"/>
-        <text x="${x+18}" y="${H+16}" font-size="11" text-anchor="middle" fill="var(--sub)">${+d.m.slice(5)}月</text>`;
+      const x = k*slot + (slot - bw*2 - 2)/2, hi = d.i/max*H, he = d.e/max*H;
+      const show = (ms.length - 1 - k) % step === 0;
+      return `<rect x="${x}" y="${H-hi}" width="${bw}" height="${hi}" rx="2" fill="var(--income)"/>
+        <rect x="${x+bw+2}" y="${H-he}" width="${bw}" height="${he}" rx="2" fill="var(--expense)"/>
+        ${show ? `<text x="${x+bw+1}" y="${H+16}" font-size="${fs}" text-anchor="middle" fill="var(--sub)">${+d.m.slice(5)}月</text>` : ''}`;
     }).join('')}
   </svg>
   <div class="row sub" style="justify-content:center;gap:16px">
@@ -583,9 +621,9 @@ function drawRec(){
       <option value="" ${rm.catId===null?'selected':''}>❓ 未分類</option></select></div>
     <div class="field"><label>備註</label><input id="r_note" value="${esc(rm.note)}" placeholder="例如：房租"></div>
     <div class="field"><label>頻率</label><select id="r_freq" onchange="recFreq(this.value)">
+      <option value="yearly" ${rm.freq==='yearly'?'selected':''}>每年</option>
       <option value="monthly" ${rm.freq==='monthly'?'selected':''}>每月</option>
       <option value="weekly" ${rm.freq==='weekly'?'selected':''}>每週</option>
-      <option value="yearly" ${rm.freq==='yearly'?'selected':''}>每年</option>
       <option value="daily" ${rm.freq==='daily'?'selected':''}>每天</option></select></div>
     ${rm.freq==='monthly' ? `<div class="field"><label>每月幾號（沒有該日的月份會記在月底）</label>
         <input id="r_day" type="number" min="1" max="31" value="${rm.day}"></div>` : ''}
