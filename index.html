@@ -105,7 +105,7 @@ function defaultAccount(){ return {id:'a_cash', name:'現金', icon:'💵', type
 
 let db = load();
 ensureAccounts();
-let st = {tab:'add', month:ym(new Date()), statType:'expense', catTab:'expense', range:savedRange(), catOpen:false,
+let st = {tab:'add', month:ym(new Date()), catTab:'expense', range:savedRange(), catOpen:false,
           draft:newDraft('expense')};
 
 /* ---------- 資料 ---------- */
@@ -483,27 +483,36 @@ function editRecord(id){
 }
 
 /* ---------- 統計與預算 ---------- */
+// 把 {分類id: 金額} 整理成由大到小的列表
+function catRows(by){
+  return Object.entries(by).map(([id,v]) => ({c:cat(id==='null' ? null : id), v})).sort((a,b) => b.v - a.v);
+}
 function vStats(){
-  const s = sumBy(st.month, st.statType);
-  const rows = Object.entries(s.by).map(([id,v]) => ({c:cat(id==='null'?null:id), v})).sort((a,b) => b.v - a.v);
+  const inc = sumBy(st.month, 'income'), exp = sumBy(st.month, 'expense');
   return monthNav() + `
-  <div class="seg">
-    <button class="${st.statType==='expense'?'on':''}" onclick="st.statType='expense';render()">支出</button>
-    <button class="${st.statType==='income'?'on':''}" onclick="st.statType='income';render()">收入</button>
+  <div class="card sum">
+    <div><span class="sub">收入</span><b class="inc">${money(inc.total)}</b></div>
+    <div><span class="sub">支出</span><b class="exp">${money(exp.total)}</b></div>
+    <div><span class="sub">結餘</span><b>${money(inc.total - exp.total)}</b></div>
   </div>
-  ${st.statType==='expense' ? budgetCard() : ''}
-  <div class="card">
+  ${budgetCard()}
+  ${monthCard('本月支出', catRows(exp.by), exp.total, 'exp')}
+  ${monthCard('本月收入', catRows(inc.by), inc.total, 'inc')}
+  ${rangeSection()}`;
+}
+// 單月的分類占比：環狀圖＋各分類進度條
+function monthCard(title, rows, total, cls){
+  return `<h2>${title}</h2><div class="card">
     <div class="row" style="align-items:center">
-      ${donut(rows, s.total)}
-      <div class="sp"><div class="sub">本月${st.statType==='expense'?'支出':'收入'}</div><b style="font-size:1.3rem">${money(s.total)}</b></div>
+      ${donut(rows, total)}
+      <div class="sp"><div class="sub">合計</div><b class="${cls}" style="font-size:1.3rem">${money(total)}</b></div>
     </div>
     ${rows.length ? rows.map(r => `
       <div style="margin-top:12px"><div class="row"><span>${esc(r.c.icon)} ${esc(r.c.name)}</span><span class="sp"></span>
-        <span class="sub">${Math.round(r.v/s.total*100)}%</span><b>${money(r.v)}</b></div>
-        <div class="bar"><span style="width:${r.v/s.total*100}%;background:${r.c.color}"></span></div></div>`).join('')
+        <span class="sub">${Math.round(r.v/total*100)}%</span><b>${money(r.v)}</b></div>
+        <div class="bar"><span style="width:${r.v/total*100}%;background:${r.c.color}"></span></div></div>`).join('')
       : '<div class="empty">沒有資料</div>'}
-  </div>
-  ${rangeSection()}`;
+  </div>`;
 }
 function donut(rows, total, solid){
   // solid：實心圓餅（粗線畫滿半徑）；否則是環狀圖
@@ -521,20 +530,21 @@ function donut(rows, total, solid){
 function rangeSection(){
   const n = st.range;
   const ms = Array.from({length:n}, (_,i) => shiftMonth(st.month, i - n + 1));
-  const set = new Set(ms), by = {};
-  let total = 0;
-  for(const r of db.records) if(r.type === st.statType && set.has(r.date.slice(0,7))){
-    total += r.amount; by[r.catId] = (by[r.catId] || 0) + r.amount;
+  const set = new Set(ms), by = {expense:{}, income:{}}, total = {expense:0, income:0};
+  for(const r of db.records) if(by[r.type] && set.has(r.date.slice(0,7))){
+    total[r.type] += r.amount; by[r.type][r.catId] = (by[r.type][r.catId] || 0) + r.amount;
   }
-  const rows = Object.entries(by).map(([id,v]) => ({c:cat(id==='null'?null:id), v})).sort((a,b) => b.v - a.v);
-  const label = st.statType === 'expense' ? '支出' : '收入';
   return `<div class="row" style="margin:18px 0 8px"><h2 class="sp" style="margin:0">收支趨勢</h2>
       <span class="sub">截至本月，往前</span>
       <select style="width:auto" onchange="setRange(this.value)" aria-label="顯示月數">
         ${Array.from({length:36}, (_,i) => i + 1).map(k => `<option value="${k}" ${k===n?'selected':''}>${k} 個月</option>`).join('')}
       </select></div>
     <div class="card">${bars(ms)}</div>
-    <h2>${n} 個月的${label}分類占比</h2>
+    ${rangePie(`${n} 個月的支出分類占比`, catRows(by.expense), total.expense)}
+    ${rangePie(`${n} 個月的收入分類占比`, catRows(by.income), total.income)}`;
+}
+function rangePie(title, rows, total){
+  return `<h2>${title}</h2>
     <div class="card">
       <div class="row" style="justify-content:center">${donut(rows, total, true)}</div>
       <div class="sub" style="text-align:center;margin:6px 0">合計 ${money(total)}</div>
