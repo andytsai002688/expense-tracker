@@ -23,7 +23,7 @@ html,body{margin:0;background:var(--bg);color:var(--text);font:16px/1.4 system-u
 #app{max-width:480px;margin:0 auto;min-height:100vh;padding:12px 16px calc(84px + env(safe-area-inset-bottom))}
 h2{font-size:1.05rem;margin:18px 0 8px}
 button{font:inherit;color:inherit;cursor:pointer}
-input,select{font:inherit;color:var(--text);background:var(--card);border:1px solid var(--line);border-radius:10px;padding:10px 12px;width:100%}
+input,select,textarea{font:inherit;color:var(--text);background:var(--card);border:1px solid var(--line);border-radius:10px;padding:10px 12px;width:100%}
 .card{background:var(--card);border-radius:14px;padding:14px;margin-bottom:12px;border:1px solid var(--line)}
 .row{display:flex;align-items:center;gap:10px}
 .sp{flex:1}
@@ -72,6 +72,8 @@ nav button.on{color:var(--accent);font-weight:600}
 .emojis button.on,.colors button.on{border-color:var(--text)}
 #toast{position:fixed;left:50%;bottom:96px;transform:translateX(-50%);background:#222;color:#fff;padding:10px 16px;border-radius:20px;font-size:.9rem;display:none;z-index:20;max-width:90%;text-align:center}
 .tag{display:inline-block;background:var(--chip);border-radius:6px;padding:1px 7px;font-size:.75rem;color:var(--sub);margin-left:6px}
+textarea{resize:vertical;min-height:72px;line-height:1.4}
+.detail{white-space:pre-wrap;word-break:break-word;display:-webkit-box;-webkit-line-clamp:3;-webkit-box-orient:vertical;overflow:hidden}
 </style>
 </head>
 <body>
@@ -245,7 +247,7 @@ function newDraft(type){
   let accId = defaultAcc().id;
   try{ const l = localStorage.getItem('ledger.acc'); if(l && acc(l)) accId = l; }catch(e){}
   const other = db.accounts.find(a => a.id !== accId);
-  return {type, amount:'', catId:type === 'transfer' ? null : (first ? first.id : null), date:ymd(new Date()), note:'',
+  return {type, amount:'', catId:type === 'transfer' ? null : (first ? first.id : null), date:ymd(new Date()), note:'', detail:'',
           editId:null, accId, toAccId:other ? other.id : accId};
 }
 const TABS = [['add','✏️','記帳'],['list','📋','明細'],['stats','📊','統計'],['acc','🏦','帳戶'],['set','⚙️','設定']];
@@ -334,6 +336,8 @@ function vAdd(){
     <input type="date" value="${d.date}" onchange="st.draft.date=this.value||st.draft.date;render()" style="flex:1">
     <input type="text" placeholder="備註" value="${esc(d.note)}" oninput="st.draft.note=this.value" style="flex:2">
   </div>
+  <div class="field"><textarea rows="3" placeholder="明細（可換行，例如：品項、人數、備忘）" aria-label="明細"
+    oninput="st.draft.detail=this.value">${esc(d.detail)}</textarea></div>
   <div class="pad">
     ${[7,8,9].map(k=>`<button onclick="key('${k}')">${k}</button>`).join('')}<button onclick="key('<')">⌫</button>
     ${[4,5,6].map(k=>`<button onclick="key('${k}')">${k}</button>`).join('')}
@@ -348,7 +352,7 @@ function vAdd(){
 function amtText(){ return money(st.draft.amount === '' ? 0 : st.draft.amount.replace(/\.$/,'')) + (st.draft.amount.endsWith('.') ? '.' : ''); }
 function setType(t){
   const o = st.draft;
-  st.draft = {...newDraft(t), date:o.date, note:o.note, amount:o.amount, editId:o.editId, accId:o.accId, toAccId:o.toAccId};
+  st.draft = {...newDraft(t), date:o.date, note:o.note, detail:o.detail, amount:o.amount, editId:o.editId, accId:o.accId, toAccId:o.toAccId};
   if(t === 'transfer' && st.draft.accId === st.draft.toAccId){
     const other = db.accounts.find(a => a.id !== st.draft.accId);
     if(other) st.draft.toAccId = other.id;
@@ -374,7 +378,7 @@ function saveRecord(){
   if(!(amount > 0)){ toast('請輸入金額'); return; }
   const isT = d.type === 'transfer';
   if(isT && d.accId === d.toAccId){ toast(db.accounts.length < 2 ? '請先到「帳戶」新增另一個帳戶' : '轉出與轉入帳戶不能相同'); return; }
-  const fields = {type:d.type, amount, catId:isT ? null : d.catId, date:d.date, note:d.note, accId:d.accId, toAccId:isT ? d.toAccId : undefined};
+  const fields = {type:d.type, amount, catId:isT ? null : d.catId, date:d.date, note:d.note, detail:d.detail || undefined, accId:d.accId, toAccId:isT ? d.toAccId : undefined};
   if(d.editId) Object.assign(db.records.find(x => x.id === d.editId), fields);
   else db.records.push({id:uid(), ...fields});
   save();
@@ -435,7 +439,8 @@ function recItem(r){
   return `<div class="item" onclick="editRecord('${r.id}')">
     <div class="ico" style="background:${c.color}33">${esc(c.icon)}</div>
     <div class="sp"><div>${esc(c.name)}${r.ruleId?`<span class="tag">${r.ruleId==='cardpay'?'自動繳款':'定期'}</span>`:''}</div>
-      ${note?`<div class="sub">${esc(note)}</div>`:''}</div>
+      ${note?`<div class="sub">${esc(note)}</div>`:''}
+      ${r.detail?`<div class="sub detail">${esc(r.detail)}</div>`:''}</div>
     <b class="${isT?'':r.type==='expense'?'exp':'inc'}">${isT?'':r.type==='expense'?'-':'+'}${money(r.amount)}</b>
   </div>`;
 }
@@ -459,7 +464,7 @@ function vList(){
 function editRecord(id){
   const r = db.records.find(x => x.id === id);
   const from = accOf(r).id;
-  st.draft = {type:r.type, amount:String(r.amount), catId:r.catId, date:r.date, note:r.note||'', editId:id,
+  st.draft = {type:r.type, amount:String(r.amount), catId:r.catId, date:r.date, note:r.note||'', detail:r.detail||'', editId:id,
               accId:from, toAccId:r.toAccId || (db.accounts.find(a => a.id !== from) || {id:from}).id};
   st.tab = 'add'; render(); scrollTo(0,0);
 }
@@ -1013,9 +1018,9 @@ function zipStore(files, mime){
 }
 function exportXlsx(){
   const x = s => esc(String(s ?? '').replace(/[\x00-\x08\x0b\x0c\x0e-\x1f]/g, ''));
-  const str = (ref, v, s) => `<c r="${ref}" t="inlineStr"${s ? ` s="${s}"` : ''}><is><t>${x(v)}</t></is></c>`;
-  const head = ['日期','類型','分類','帳戶','金額','備註'];
-  const L = 'ABCDEF';
+  const str = (ref, v, s) => `<c r="${ref}" t="inlineStr"${s ? ` s="${s}"` : ''}><is><t xml:space="preserve">${x(v)}</t></is></c>`;
+  const head = ['日期','類型','分類','帳戶','金額','備註','明細'];
+  const L = 'ABCDEFG';
   const typeName = {expense:'支出', income:'收入', transfer:'轉帳'};
   const recs = [...db.records].sort((a,b) => a.date.localeCompare(b.date));
   const rows = [`<row r="1">${head.map((h,i) => str(L[i] + 1, h, 1)).join('')}</row>`]
@@ -1023,7 +1028,7 @@ function exportXlsx(){
       const n = i + 2, isT = r.type === 'transfer', to = isT ? acc(r.toAccId) : null;
       return `<row r="${n}">` + str('A'+n, r.date) + str('B'+n, typeName[r.type] || r.type) + str('C'+n, isT ? '' : cat(r.catId).name)
         + str('D'+n, isT ? `${accLabel(accOf(r))} → ${to ? accLabel(to) : ''}` : accLabel(accOf(r)))
-        + `<c r="E${n}"><v>${r.amount}</v></c>` + str('F'+n, r.note) + '</row>';
+        + `<c r="E${n}"><v>${r.amount}</v></c>` + str('F'+n, r.note) + str('G'+n, r.detail, 2) + '</row>';
     }));
   const NS = 'http://schemas.openxmlformats.org/spreadsheetml/2006/main';
   const REL = 'http://schemas.openxmlformats.org/officeDocument/2006/relationships';
@@ -1033,8 +1038,8 @@ function exportXlsx(){
     {name:'_rels/.rels', text:head0 + `<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="${REL}/officeDocument" Target="xl/workbook.xml"/></Relationships>`},
     {name:'xl/workbook.xml', text:head0 + `<workbook xmlns="${NS}" xmlns:r="${REL}"><sheets><sheet name="記帳明細" sheetId="1" r:id="rId1"/></sheets></workbook>`},
     {name:'xl/_rels/workbook.xml.rels', text:head0 + `<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="${REL}/worksheet" Target="worksheets/sheet1.xml"/><Relationship Id="rId2" Type="${REL}/styles" Target="styles.xml"/></Relationships>`},
-    {name:'xl/styles.xml', text:head0 + `<styleSheet xmlns="${NS}"><fonts count="2"><font><sz val="11"/><name val="Calibri"/></font><font><b/><sz val="11"/><name val="Calibri"/></font></fonts><fills count="2"><fill><patternFill patternType="none"/></fill><fill><patternFill patternType="gray125"/></fill></fills><borders count="1"><border><left/><right/><top/><bottom/><diagonal/></border></borders><cellStyleXfs count="1"><xf numFmtId="0" fontId="0" fillId="0" borderId="0"/></cellStyleXfs><cellXfs count="2"><xf numFmtId="0" fontId="0" fillId="0" borderId="0" xfId="0"/><xf numFmtId="0" fontId="1" fillId="0" borderId="0" xfId="0" applyFont="1"/></cellXfs></styleSheet>`},
-    {name:'xl/worksheets/sheet1.xml', text:head0 + `<worksheet xmlns="${NS}"><sheetViews><sheetView workbookViewId="0"><pane ySplit="1" topLeftCell="A2" activePane="bottomLeft" state="frozen"/></sheetView></sheetViews><cols><col min="1" max="1" width="13" customWidth="1"/><col min="2" max="2" width="8" customWidth="1"/><col min="3" max="3" width="14" customWidth="1"/><col min="4" max="4" width="18" customWidth="1"/><col min="5" max="5" width="12" customWidth="1"/><col min="6" max="6" width="30" customWidth="1"/></cols><sheetData>${rows.join('')}</sheetData></worksheet>`}
+    {name:'xl/styles.xml', text:head0 + `<styleSheet xmlns="${NS}"><fonts count="2"><font><sz val="11"/><name val="Calibri"/></font><font><b/><sz val="11"/><name val="Calibri"/></font></fonts><fills count="2"><fill><patternFill patternType="none"/></fill><fill><patternFill patternType="gray125"/></fill></fills><borders count="1"><border><left/><right/><top/><bottom/><diagonal/></border></borders><cellStyleXfs count="1"><xf numFmtId="0" fontId="0" fillId="0" borderId="0"/></cellStyleXfs><cellXfs count="3"><xf numFmtId="0" fontId="0" fillId="0" borderId="0" xfId="0"/><xf numFmtId="0" fontId="1" fillId="0" borderId="0" xfId="0" applyFont="1"/><xf numFmtId="0" fontId="0" fillId="0" borderId="0" xfId="0" applyAlignment="1"><alignment vertical="top" wrapText="1"/></xf></cellXfs></styleSheet>`},
+    {name:'xl/worksheets/sheet1.xml', text:head0 + `<worksheet xmlns="${NS}"><sheetViews><sheetView workbookViewId="0"><pane ySplit="1" topLeftCell="A2" activePane="bottomLeft" state="frozen"/></sheetView></sheetViews><cols><col min="1" max="1" width="13" customWidth="1"/><col min="2" max="2" width="8" customWidth="1"/><col min="3" max="3" width="14" customWidth="1"/><col min="4" max="4" width="18" customWidth="1"/><col min="5" max="5" width="12" customWidth="1"/><col min="6" max="6" width="24" customWidth="1"/><col min="7" max="7" width="40" customWidth="1"/></cols><sheetData>${rows.join('')}</sheetData></worksheet>`}
   ], 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
   download(`記帳明細-${ymd(new Date())}.xlsx`, blob);
 }
