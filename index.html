@@ -105,7 +105,7 @@ function defaultAccount(){ return {id:'a_cash', name:'現金', icon:'💵', type
 
 let db = load();
 ensureAccounts();
-let st = {tab:'add', month:ym(new Date()), catTab:'expense', range:savedRange(), catOpen:false,
+let st = {tab:'add', month:ym(new Date()), catTab:'expense', range:savedRange(), catOpen:false, listAcc:'',
           draft:newDraft('expense')};
 
 /* ---------- 資料 ---------- */
@@ -495,21 +495,32 @@ function recItem(r){
   </div>`;
 }
 function vList(){
-  const recs = monthRecords(st.month).sort((a,b) => b.date.localeCompare(a.date) || b.id.localeCompare(a.id));
-  const inc = sumBy(st.month,'income').total, exp = sumBy(st.month,'expense').total;
+  // 付款方式篩選：選了某個帳戶，就只看經過這個帳戶的記錄（含轉入、轉出），並列出它這個月花在哪些分類
+  const sel = st.listAcc && acc(st.listAcc) ? acc(st.listAcc) : null;
+  const all = monthRecords(st.month).sort((a,b) => b.date.localeCompare(a.date) || b.id.localeCompare(a.id));
+  const recs = sel ? all.filter(r => accOf(r).id === sel.id || r.toAccId === sel.id) : all;
+  let inc = 0, exp = 0;
+  const by = {};
+  for(const r of recs){
+    if(r.type === 'income') inc += r.amount;
+    if(r.type === 'expense'){ exp += r.amount; by[r.catId] = (by[r.catId] || 0) + r.amount; }
+  }
   const days = {};
   recs.forEach(r => (days[r.date] = days[r.date] || []).push(r));
   return monthNav() + `
+  <div class="row field"><span class="sub" style="white-space:nowrap">付款方式</span>
+    <select onchange="st.listAcc=this.value;render()" aria-label="付款方式"><option value="">全部</option>${accOptions(sel ? sel.id : '')}</select></div>
   <div class="card sum">
     <div><span class="sub">收入</span><b class="inc">${money(inc)}</b></div>
     <div><span class="sub">支出</span><b class="exp">${money(exp)}</b></div>
     <div><span class="sub">結餘</span><b>${money(inc-exp)}</b></div>
-  </div>` + (recs.length ? Object.keys(days).map(date => {
+  </div>` + (sel && exp ? monthCard(`用「${esc(accLabel(sel))}」花在哪裡`, catRows(by), exp, 'exp') + '<h2>記錄</h2>' : '')
+  + (recs.length ? Object.keys(days).map(date => {
     const list = days[date];
     const net = list.reduce((s,r) => s + (r.type==='income' ? r.amount : r.type==='expense' ? -r.amount : 0), 0);
     return `<div class="day"><span>${dayLabel(date)}</span><span>${money(net)}</span></div>
     <div class="card" style="padding:4px 14px">${list.map(recItem).join('')}</div>`;
-  }).join('') : '<div class="empty">這個月還沒有記錄</div>');
+  }).join('') : `<div class="empty">${sel ? '這個月沒有使用這個付款方式的記錄' : '這個月還沒有記錄'}</div>`);
 }
 function editRecord(id){
   const r = db.records.find(x => x.id === id);
