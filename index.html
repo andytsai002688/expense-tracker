@@ -161,25 +161,62 @@ function cardAvail(a, b){
   const bal = (b || balances()).get(a.id) || 0, limit = Number(a.limit) || 0;
   return {bal, owed:Math.max(0, Math.round(-bal * 100) / 100), limit, avail:limit ? Math.round((limit + bal) * 100) / 100 : null};
 }
-// 繳款日自動扣款：把「繳款日當天為止」已刷未繳的金額，從所屬銀行轉到信用卡，卡片已刷金額就歸零
+function cardOwed(c, date){ return Math.max(0, Math.round(-(balances(date).get(c.id) || 0) * 100) / 100); }
+// 結帳日之後第一個繳款日
+function nextDue(c, date){
+  const d = parse(date);
+  for(let i = 0; i < 62; i++){
+    d.setDate(d.getDate() + 1);
+    const dim = new Date(d.getFullYear(), d.getMonth() + 1, 0).getDate();
+    if(d.getDate() === Math.min(c.payDay, dim)) return ymd(d);
+  }
+  return date;
+}
+// 帳單狀態：已出帳未繳（billed）、最近的繳款期限（due）、還沒出帳的消費（unbilled）
+function cardBill(a, owed){
+  const pending = (a.statements || []).filter(s => !s.paid);
+  const billed = Math.min(owed, Math.round(pending.reduce((s, x) => s + x.amount, 0) * 100) / 100);
+  return {billed, due:pending.map(s => s.due).sort()[0] || null, unbilled:Math.max(0, Math.round((owed - billed) * 100) / 100)};
+}
+function md(s){ const d = parse(s); return `${d.getMonth() + 1}/${d.getDate()}`; }
+// 信用卡自動處理（每次開啟 App 時，把上次處理之後到今天的每一天補算一遍）：
+// - 有設結帳日：結帳日把「當天為止、還沒出帳」的消費結成一張帳單；繳款日從所屬銀行轉帳繳清到期的帳單
+// - 只設繳款日：繳款日直接繳清當天為止的全部已刷金額
 function runCardPayments(){
   const today = new Date(); today.setHours(0,0,0,0);
   let added = 0;
   for(const c of db.accounts){
     if(c.type !== 'card' || !c.payDay || !acc(c.parentId)) continue;
-    if(!c.lastRun){ c.lastRun = ymd(today); continue; }   // 剛設定：不補繳過去的日子
+    if(!c.lastRun){ c.lastRun = ymd(today); continue; }   // 剛設定：不補算過去的日子
     const cur = parse(c.lastRun);
     cur.setDate(cur.getDate() + 1);
     for(; cur <= today; cur.setDate(cur.getDate() + 1)){
-      const dim = new Date(cur.getFullYear(), cur.getMonth() + 1, 0).getDate();
-      if(cur.getDate() !== Math.min(c.payDay, dim)) continue;
-      const date = ymd(cur), id = `cp_${c.id}_${date}`;   // 固定 id：多台設備不會重複扣款
-      if(db.records.some(r => r.id === id)) continue;
-      const owed = Math.round(-(balances(date).get(c.id) || 0) * 100) / 100;
-      if(owed > 0){
-        db.records.push({id, type:'transfer', amount:owed, catId:null, date, note:'信用卡繳款', ruleId:'cardpay',
-                         accId:c.parentId, toAccId:c.id});
-        added++;
+      const dim = new Date(cur.getFullYear(), cur.getMonth() + 1, 0).getDate(), date = ymd(cur);
+      // 先繳款，再結帳（同一天兩者都有時，新帳單不會把剛繳掉的算進去）
+      if(cur.getDate() === Math.min(c.payDay, dim)){
+        let amount;
+        if(c.statementDay){
+          const due = (c.statements || []).filter(s => !s.paid && s.due === date);
+          amount = Math.min(cardOwed(c, date), due.reduce((s, x) => s + x.amount, 0));
+          due.forEach(s => { s.paid = true; });
+        } else amount = cardOwed(c, date);
+        amount = Math.round(amount * 100) / 100;
+        const id = `cp_${c.id}_${date}`;   // 固定 id：多台設備不會重複扣款
+        if(amount > 0 && !db.records.some(r => r.id === id)){
+          db.records.push({id, type:'transfer', amount, catId:null, date, note:'信用卡繳款', ruleId:'cardpay',
+                           accId:c.parentId, toAccId:c.id});
+          added++;
+        }
+      }
+      if(c.statementDay && cur.getDate() === Math.min(c.statementDay, dim)){
+        const id = `st_${c.id}_${date}`;
+        c.statements = c.statements || [];
+        const unpaid = c.statements.filter(s => !s.paid).reduce((s, x) => s + x.amount, 0);
+        const amount = Math.max(0, Math.round((cardOwed(c, date) - unpaid) * 100) / 100);
+        if(amount > 0 && !c.statements.some(s => s.id === id)){
+          c.statements.push({id, date, amount, due:nextDue(c, date), paid:false});
+          c.statements = c.statements.slice(-12);   // 只保留最近 12 期
+        }
       }
     }
     c.lastRun = ymd(today);
@@ -607,14 +644,18 @@ function cardBanner(){
   const c = cardAvail(a), bank = acc(a.parentId);
   const pct = c.limit ? Math.min(100, c.owed / c.limit * 100) : 0;
   const color = pct >= 100 ? 'var(--danger)' : pct >= 80 ? 'var(--warn)' : 'var(--accent)';
+  const cycle = a.statementDay ? `每月 ${a.statementDay} 號結帳，` : '';
   const pay = a.payDay
-    ? (bank ? `每月 ${a.payDay} 號從「${esc(bank.name)}」自動扣款` : `每月 ${a.payDay} 號繳款（尚未指定所屬銀行，不會自動扣款）`)
+    ? (bank ? `${cycle}每月 ${a.payDay} 號從「${esc(bank.name)}」自動扣款` : `${cycle}每月 ${a.payDay} 號繳款（尚未指定所屬銀行，不會自動扣款）`)
     : '尚未設定繳款日';
+  const bill = cardBill(a, c.owed);
   return `<div class="card" style="padding:12px 14px">
     <div class="row"><b class="sp">${esc(a.icon)} ${esc(accLabel(a))}</b>${c.limit ? `<span class="sub">額度 ${money(c.limit)}</span>` : ''}</div>
     ${c.limit ? `<div style="font-size:1.4rem;font-weight:700;margin-top:6px;${c.avail < 0 ? 'color:var(--danger)' : ''}">可用額度 ${money(c.avail)}</div>
       <div class="bar"><span style="width:${pct}%;background:${color}"></span></div>` : '<div class="sub" style="margin-top:6px">尚未設定額度</div>'}
-    <div class="sub" style="margin-top:6px">已刷未繳 ${money(c.owed)}</div>
+    <div class="sub" style="margin-top:6px">${a.statementDay
+      ? `已出帳 ${money(bill.billed)}${bill.due && bill.billed ? `（${md(bill.due)} 繳款）` : ''}・未出帳 ${money(bill.unbilled)}`
+      : `已刷未繳 ${money(c.owed)}`}</div>
     <div class="sub" id="cardAfter">${cardAfterText()}</div>
     <div class="sub">${pay}</div></div>`;
 }
@@ -668,7 +709,7 @@ function vAcc(){
     ${budgetCardSummary()}
     ${recSection('expense')}
     ${recSection('income')}
-    <p class="sub">帳戶總額是所有帳戶餘額相加，現金總額只算類型為「現金」的帳戶。信用卡歸在所屬銀行底下，刷卡會讓卡片餘額變成負數，代表已刷未繳；設定繳款日後，每月那一天會自動從所屬銀行扣掉已刷金額，卡片的已刷金額就歸零（若當天沒有開啟 App，下次開啟時會補上，日期仍是繳款日）。在「記帳」頁選「轉帳」，可以記錄提款、還款等帳戶之間的轉移。</p>`;
+    <p class="sub">帳戶總額是所有帳戶餘額相加，現金總額只算類型為「現金」的帳戶。信用卡歸在所屬銀行底下，刷卡會讓卡片餘額變成負數，代表已刷未繳；設定結帳日與繳款日後，結帳日會把當天以前的消費結成帳單，繳款日自動從所屬銀行扣掉帳單金額；只設繳款日，則是繳款日直接繳清全部已刷金額。若當天沒有開啟 App，下次開啟時會補上，日期仍是當天。在「記帳」頁選「轉帳」，可以記錄提款、還款等帳戶之間的轉移。</p>`;
 }
 function budgetCardSummary(){
   const rows = db.categories.filter(c => c.type === 'expense' && db.budgets.cats[c.id])
@@ -713,7 +754,10 @@ function accRow(a, depth, t){
   let sub = '', amount = `<b class="${v<0?'exp':''}">${money(v)}</b>`;
   if(a.type === 'card'){
     const c = cardAvail(a, t.b);
-    sub = [c.limit ? `額度 ${money(c.limit)}・可用 ${money(c.avail)}` : '未設額度', a.payDay ? `每月 ${a.payDay} 號繳款` : ''].filter(Boolean).join('・');
+    const bill = cardBill(a, c.owed);
+    sub = [c.limit ? `額度 ${money(c.limit)}・可用 ${money(c.avail)}` : '未設額度',
+           a.statementDay ? `${a.statementDay} 號結帳` : '', a.payDay ? `${a.payDay} 號繳款` : ''].filter(Boolean).join('・')
+        + (a.statementDay && c.owed > 0 ? `<br>已出帳 ${money(bill.billed)}${bill.due && bill.billed ? `（${md(bill.due)} 繳款）` : ''}・未出帳 ${money(bill.unbilled)}` : '');
     amount = c.owed > 0 ? `<b class="exp">已刷 ${money(c.owed)}</b>` : `<b>${money(v)}</b>`;
   }
   return `<div class="item" style="${depth ? 'padding-left:22px' : ''}" onclick="accModal('${a.id}')">
@@ -741,9 +785,9 @@ let am = null;
 function accModal(id){
   const a = id ? acc(id) : null;
   am = a
-    ? {id, type:a.type, name:a.name, icon:a.icon, parentId:a.parentId || '', limit:a.limit || '', payDay:a.payDay || '',
+    ? {id, type:a.type, name:a.name, icon:a.icon, parentId:a.parentId || '', limit:a.limit || '', statementDay:a.statementDay || '', payDay:a.payDay || '',
        initial:a.type === 'card' ? String(a.initial ? -a.initial : 0) : String(a.initial)}
-    : {id:null, type:'bank', name:'', icon:accType('bank')[2], parentId:'', limit:'', payDay:'', initial:'0'};
+    : {id:null, type:'bank', name:'', icon:accType('bank')[2], parentId:'', limit:'', statementDay:'', payDay:'', initial:'0'};
   drawAcc();
 }
 function drawAcc(){
@@ -756,19 +800,28 @@ function drawAcc(){
         <option value="">未指定</option>${banks.map(b => `<option value="${b.id}" ${b.id === am.parentId ? 'selected' : ''}>${esc(b.icon)} ${esc(b.name)}</option>`).join('')}</select>
         ${banks.length ? '' : '<div class="sub" style="margin-top:4px">還沒有「銀行」類型的帳戶，請先新增銀行帳戶。</div>'}</div>
       <div class="field"><label>信用額度</label><input id="a_limit" type="number" inputmode="decimal" min="0" step="any" value="${esc(am.limit)}"></div>
+      <div class="field"><label>每月結帳日（1–31，留空表示不分帳單週期，繳款日直接繳清全部已刷金額）</label><input id="a_stmt" type="number" inputmode="numeric" min="1" max="31" value="${esc(am.statementDay)}"></div>
       <div class="field"><label>每月繳款日（1–31，留空表示不自動扣款）</label><input id="a_pay" type="number" inputmode="numeric" min="1" max="31" value="${esc(am.payDay)}"></div>` : ''}
     <div class="field"><label>圖示（emoji）</label><input id="a_icon" maxlength="4" value="${esc(am.icon)}"></div>
     <div class="field"><label>${isCard ? '目前已刷、還沒繳的金額（填正數，沒有就填 0）' : '起始餘額（建立帳戶時已有的金額，可為負數）'}</label>
       <input id="a_init" type="number" inputmode="decimal" step="any" value="${esc(am.initial)}"></div>
+    ${isCard && am.id ? billHistory(acc(am.id)) : ''}
     <div class="row">${am.id && db.accounts.length > 1 ? `<button class="btn dng" onclick="delAcc('${am.id}')">刪除</button>` : ''}
       <span class="sp"></span><button class="btn" onclick="closeModal()">取消</button>
       <button class="btn pri" onclick="saveAcc()">儲存</button></div>`);
+}
+function billHistory(a){
+  const list = (a && a.statements || []).slice(-6).reverse();
+  if(!list.length) return '';
+  return `<div class="field"><label>最近的帳單</label>${list.map(s => `<div class="row sub" style="margin-top:4px">
+    <span>${md(s.date)} 結帳</span><span class="sp"></span><span>${money(s.amount)}・${md(s.due)} 繳款・${s.paid ? '已繳' : '未繳'}</span></div>`).join('')}</div>`;
 }
 function syncAcc(){
   am.name = $('a_name').value; am.icon = $('a_icon').value; am.initial = $('a_init').value;
   if($('a_parent')) am.parentId = $('a_parent').value;
   if($('a_limit')) am.limit = $('a_limit').value;
   if($('a_pay')) am.payDay = $('a_pay').value;
+  if($('a_stmt')) am.statementDay = $('a_stmt').value;
 }
 function accTypeChanged(k){
   syncAcc();
@@ -789,11 +842,15 @@ function saveAcc(){
     f.parentId = am.parentId || null;
     f.limit = Math.max(0, parseFloat(am.limit) || 0);
     f.payDay = pd >= 1 ? pd : 0;
+    const sd = parseInt(am.statementDay);
+    if(am.statementDay !== '' && !(sd >= 1 && sd <= 31)){ toast('結帳日請填 1–31'); return; }
+    if(sd >= 1 && !f.payDay){ toast('設定結帳日時，請一併填繳款日'); return; }
+    f.statementDay = sd >= 1 ? sd : 0;
     // lastRun：自動扣款已處理到哪一天。剛設定繳款日時從今天算起，不會去補繳過去的日子
     f.lastRun = old && old.lastRun && old.payDay ? old.lastRun : (f.payDay ? ymd(new Date()) : null);
   }
   if(old){
-    if(!isCard){ delete old.parentId; delete old.limit; delete old.payDay; delete old.lastRun; }
+    if(!isCard){ delete old.parentId; delete old.limit; delete old.payDay; delete old.lastRun; delete old.statementDay; delete old.statements; }
     Object.assign(old, f);
   } else db.accounts.push({id:'a_' + uid(), ...f});
   save(); closeModal(); render();
