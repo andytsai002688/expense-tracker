@@ -786,10 +786,12 @@ function accModal(id){
   const a = id ? acc(id) : null;
   am = a
     ? {id, type:a.type, name:a.name, icon:a.icon, parentId:a.parentId || '', limit:a.limit || '', statementDay:a.statementDay || '', payDay:a.payDay || '',
-       initial:a.type === 'card' ? String(a.initial ? -a.initial : 0) : String(a.initial)}
+       initial:a.type === 'card' ? String(cardOwedNow(a)) : String(a.initial)}
     : {id:null, type:'bank', name:'', icon:accType('bank')[2], parentId:'', limit:'', statementDay:'', payDay:'', initial:'0'};
   drawAcc();
 }
+// 目前已刷未繳（負數代表溢繳）
+function cardOwedNow(a){ return Math.round(-(balances().get(a.id) || 0) * 100) / 100 || 0; }
 function drawAcc(){
   const isCard = am.type === 'card', banks = db.accounts.filter(x => x.type === 'bank' && x.id !== am.id);
   openModal(`<h2 style="margin-top:0">${am.id ? '編輯帳戶' : '新增帳戶'}</h2>
@@ -803,7 +805,7 @@ function drawAcc(){
       <div class="field"><label>每月結帳日（1–31，留空表示不分帳單週期，繳款日直接繳清全部已刷金額）</label><input id="a_stmt" type="number" inputmode="numeric" min="1" max="31" value="${esc(am.statementDay)}"></div>
       <div class="field"><label>每月繳款日（1–31，留空表示不自動扣款）</label><input id="a_pay" type="number" inputmode="numeric" min="1" max="31" value="${esc(am.payDay)}"></div>` : ''}
     <div class="field"><label>圖示（emoji）</label><input id="a_icon" maxlength="4" value="${esc(am.icon)}"></div>
-    <div class="field"><label>${isCard ? '目前已刷、還沒繳的金額（填正數，沒有就填 0）' : '起始餘額（建立帳戶時已有的金額，可為負數）'}</label>
+    <div class="field"><label>${isCard ? '目前已刷、還沒繳的金額（會隨刷卡與繳款自動更新；修改這裡會直接校正成你填的金額）' : '起始餘額（建立帳戶時已有的金額，可為負數）'}</label>
       <input id="a_init" type="number" inputmode="decimal" step="any" value="${esc(am.initial)}"></div>
     ${isCard && am.id ? billHistory(acc(am.id)) : ''}
     <div class="row">${am.id && db.accounts.length > 1 ? `<button class="btn dng" onclick="delAcc('${am.id}')">刪除</button>` : ''}
@@ -826,6 +828,8 @@ function syncAcc(){
 function accTypeChanged(k){
   syncAcc();
   if(am.icon === accType(am.type)[2]) am.icon = accType(k)[2];
+  const old = am.id ? acc(am.id) : null;
+  if(old && (k === 'card') !== (am.type === 'card')) am.initial = String(k === 'card' ? cardOwedNow(old) : old.initial);
   am.type = k;
   drawAcc();
 }
@@ -836,6 +840,10 @@ function saveAcc(){
   const type = am.type, isCard = type === 'card', init = parseFloat(am.initial) || 0;
   const f = {name, type, icon:am.icon.trim() || accType(type)[2], initial:isCard ? (init ? -init : 0) : init};
   const old = am.id ? acc(am.id) : null;
+  if(isCard && old){
+    const recSum = (balances().get(old.id) || 0) - (Number(old.initial) || 0);
+    f.initial = Math.round((-init - recSum) * 100) / 100 || 0;
+  }
   if(isCard){
     const pd = parseInt(am.payDay);
     if(am.payDay !== '' && !(pd >= 1 && pd <= 31)){ toast('繳款日請填 1–31'); return; }
