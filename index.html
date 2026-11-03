@@ -425,8 +425,10 @@ function key(k){
 }
 function saveRecord(){
   const d = st.draft, amount = parseFloat(d.amount);
-  if(!(amount > 0)){ toast('請輸入金額'); return; }
   const isT = d.type === 'transfer';
+  // 收入、支出可以記 0 元（例如贈品、免費招待）；要真的按下 0，空白不算。轉帳一定要大於 0
+  if(d.amount === '' || !(amount >= 0)){ toast('請輸入金額（0 元請按 0）'); return; }
+  if(isT && amount === 0){ toast('轉帳金額要大於 0'); return; }
   if(isT && d.accId === d.toAccId){ toast(db.accounts.length < 2 ? '請先到「帳戶」新增另一個帳戶' : '轉出與轉入帳戶不能相同'); return; }
   const fields = {type:d.type, amount, catId:isT ? null : d.catId, date:d.date, note:d.note, detail:d.detail || undefined, accId:d.accId, toAccId:isT ? d.toAccId : undefined};
   if(d.editId) Object.assign(db.records.find(x => x.id === d.editId), fields);
@@ -533,7 +535,8 @@ function editRecord(id){
 /* ---------- 統計與預算 ---------- */
 // 把 {分類id: 金額} 整理成由大到小的列表
 function catRows(by){
-  return Object.entries(by).map(([id,v]) => ({c:cat(id==='null' ? null : id), v})).sort((a,b) => b.v - a.v);
+  // 0 元的分類不畫進圖表（占比為 0，也避免除以 0）
+  return Object.entries(by).filter(([, v]) => v > 0).map(([id,v]) => ({c:cat(id==='null' ? null : id), v})).sort((a,b) => b.v - a.v);
 }
 function vStats(){
   const inc = sumBy(st.month, 'income'), exp = sumBy(st.month, 'expense');
