@@ -105,7 +105,7 @@ function defaultAccount(){ return {id:'a_cash', name:'現金', icon:'💵', type
 
 let db = load();
 ensureAccounts();
-let st = {tab:'add', month:ym(new Date()), catTab:'expense', range:savedRange(), catOpen:false, listAcc:'',
+let st = {tab:'add', month:ym(new Date()), catTab:'expense', range:savedRange(), catOpen:false, listAcc:'', listView:savedListView(), openCats:new Set(),
           draft:newDraft('expense')};
 
 /* ---------- 資料 ---------- */
@@ -224,6 +224,9 @@ function runCardPayments(){
   return added;
 }
 function rememberAcc(id){ try{ localStorage.setItem('ledger.acc', id); }catch(e){} }
+function savedListView(){
+  try{ return localStorage.getItem('ledger.listView') === 'cat' ? 'cat' : 'date'; }catch(e){ return 'date'; }
+}
 function savedRange(){
   try{ const n = parseInt(localStorage.getItem('ledger.range')); if(n >= 1 && n <= 36) return n; }catch(e){}
   return 6;
@@ -509,9 +512,15 @@ function vList(){
   }
   const days = {};
   recs.forEach(r => (days[r.date] = days[r.date] || []).push(r));
-  return monthNav() + `
+  const head = monthNav() + `
+  <div class="seg">
+    <button class="${st.listView==='date'?'on':''}" onclick="setListView('date')">依日期</button>
+    <button class="${st.listView==='cat'?'on':''}" onclick="setListView('cat')">依分類</button>
+  </div>
   <div class="row field"><span class="sub" style="white-space:nowrap">付款方式</span>
-    <select onchange="st.listAcc=this.value;render()" aria-label="付款方式"><option value="">全部</option>${accOptions(sel ? sel.id : '')}</select></div>
+    <select onchange="st.listAcc=this.value;render()" aria-label="付款方式"><option value="">全部</option>${accOptions(sel ? sel.id : '')}</select></div>`;
+  if(st.listView === 'cat') return head + catView(recs, exp, sel);
+  return head + `
   <div class="card sum">
     <div><span class="sub">收入</span><b class="inc">${money(inc)}</b></div>
     <div><span class="sub">支出</span><b class="exp">${money(exp)}</b></div>
@@ -523,6 +532,37 @@ function vList(){
     return `<div class="day"><span>${dayLabel(date)}</span><span>${money(net)}</span></div>
     <div class="card" style="padding:4px 14px">${list.map(recItem).join('')}</div>`;
   }).join('') : `<div class="empty">${sel ? '這個月沒有使用這個付款方式的記錄' : '這個月還沒有記錄'}</div>`);
+}
+function setListView(v){
+  st.listView = v;
+  try{ localStorage.setItem('ledger.listView', v); }catch(e){}
+  render();
+}
+function toggleListCat(id){
+  if(st.openCats.has(id)) st.openCats.delete(id); else st.openCats.add(id);
+  render();
+}
+// 依分類：只看支出，每個分類一組（合計由大到小），點開列出每一筆的日期、備註、付款方式、金額
+function catView(recs, exp, sel){
+  const g = {};
+  for(const r of recs) if(r.type === 'expense') (g[r.catId] = g[r.catId] || []).push(r);
+  const groups = Object.entries(g)
+    .map(([id, list]) => ({id, c:cat(id === 'null' ? null : id), list, total:list.reduce((s, r) => s + r.amount, 0)}))
+    .sort((a, b) => b.total - a.total || b.list.length - a.list.length);
+  if(!groups.length) return `<div class="empty">${sel ? '這個月沒有使用這個付款方式的支出' : '這個月沒有支出記錄'}</div>`;
+  return `<div class="card row"><span class="sp sub">本月支出合計</span><b class="exp">${money(exp)}</b></div>
+  <div class="card" style="padding:4px 14px">${groups.map(gr => {
+    const open = st.openCats.has(gr.id);
+    return `<div class="item" onclick="toggleListCat('${gr.id}')" aria-expanded="${open}">
+      <div class="ico" style="background:${gr.c.color}33">${esc(gr.c.icon)}</div>
+      <div class="sp"><b>${esc(gr.c.name)}</b> <span class="sub">${gr.list.length} 筆</span></div>
+      <b class="exp">${money(gr.total)}</b><span class="sub">${open ? '▾' : '▸'}</span></div>
+    ${open ? gr.list.map(r => `<div class="item" style="padding-left:12px" onclick="editRecord('${r.id}')">
+      <span class="sub" style="width:42px;flex:none">${md(r.date)}</span>
+      <div class="sp">${r.note ? esc(r.note) : '<span class="sub">（無備註）</span>'}</div>
+      <span class="sub" style="text-align:right">${esc(accLabel(accOf(r)))}</span>
+      <b style="min-width:64px;text-align:right">${money(r.amount)}</b></div>`).join('') : ''}`;
+  }).join('')}</div>`;
 }
 function editRecord(id){
   const r = db.records.find(x => x.id === id);
